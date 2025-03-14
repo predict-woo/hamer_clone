@@ -8,7 +8,6 @@
 *.tar
 *.tar.gz
 /discord_sandbox/
-/demo_out/
 token_channel.csv
 /_DATA/
 /hamer_training_data/
