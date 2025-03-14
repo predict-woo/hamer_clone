@@ -1,0 +1,7 @@
+/cluster/home/andrye/miniconda3/envs/hamer/lib/python3.10/site-packages/timm/models/layers/__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+No ROCm runtime is found, using ROCM_HOME='/opt/rocm'
+/cluster/home/andrye/miniconda3/envs/hamer/lib/python3.10/site-packages/mmcv/cnn/bricks/transformer.py:27: UserWarning: Fail to import ``MultiScaleDeformableAttention`` from ``mmcv.ops.multi_scale_deform_attn``, You should install ``mmcv-full`` if you need this module. 
+  warnings.warn('Fail to import ``MultiScaleDeformableAttention`` from '
+/var/spool/slurm/slurmd/state/job26183244/slurm_script: line 12: 295056 Killed                  python demo.py --img_folder example_data --out_folder demo_out --batch_size=48 --side_view --save_mesh --full_frame
+slurmstepd: error: Detected 1 oom_kill event in StepId=26183244.batch. Some of the step tasks have been OOM Killed.

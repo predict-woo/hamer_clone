@@ -10,13 +10,16 @@ from hamer.models import HAMER, download_models, load_hamer, DEFAULT_CHECKPOINT
 from hamer.utils import recursive_to
 from hamer.datasets.vitdet_dataset import ViTDetDataset, DEFAULT_MEAN, DEFAULT_STD
 from hamer.utils.renderer import Renderer, cam_crop_to_full
-import pickle
+
 LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
 
 from vitpose_model import ViTPoseModel
 
 import json
 from typing import Dict, Optional
+
+
+
 
 def main():
     parser = argparse.ArgumentParser(description='HaMeR demo code')
@@ -75,9 +78,6 @@ def main():
 
     # Iterate over all images in folder
     for img_path in img_paths:
-        
-        image_name = os.path.basename(img_path)
-        
         img_cv2 = cv2.imread(str(img_path))
 
         # Detect humans in image
@@ -133,34 +133,8 @@ def main():
         
         for batch in dataloader:
             batch = recursive_to(batch, device)
-            
-            # save batch as pickle
-            save_batch = {}
-            for key, value in batch.items():
-                if isinstance(value, torch.Tensor):
-                    save_batch[key] = value.detach().cpu().numpy()
-                else:
-                    # print key and type of value
-                    print(key, type(value))
-            
-            np.savez(os.path.join(args.out_folder, f'{image_name}_batch.npz'), **save_batch)
-            
             with torch.no_grad():
                 out = model(batch)
-            
-            # use pickle to save out, a dictionary of tensors
-            save_out = {}
-            for key, value in out.items():
-                if isinstance(value, torch.Tensor):
-                    save_out[key] = value.detach().cpu().numpy()
-                else:
-                    # print key and type of value
-                    print(key, type(value))
-            
-            # save as pickle
-
-            # # Save the dictionary as a .npz file
-            np.savez(os.path.join(args.out_folder, f'{image_name}_out.npz'), **save_out)
 
             multiplier = (2*batch['right']-1)
             pred_cam = out['pred_cam']
@@ -171,12 +145,7 @@ def main():
             multiplier = (2*batch['right']-1)
             scaled_focal_length = model_cfg.EXTRA.FOCAL_LENGTH / model_cfg.MODEL.IMAGE_SIZE * img_size.max()
             pred_cam_t_full = cam_crop_to_full(pred_cam, box_center, box_size, img_size, scaled_focal_length).detach().cpu().numpy()
-            
-            
-            np.save(os.path.join(args.out_folder, f'{image_name}_pred_cam.npy'), out['pred_cam'].detach().cpu().numpy())
-            np.save(os.path.join(args.out_folder, f'{image_name}_pred_cam_t.npy'), out['pred_cam_t'].detach().cpu().numpy())
-            np.save(os.path.join(args.out_folder, f'{image_name}_focal_length.npy'), out['focal_length'].detach().cpu().numpy())
-            
+
             # Render the result
             batch_size = batch['img'].shape[0]
             for n in range(batch_size):
@@ -186,8 +155,6 @@ def main():
                 white_img = (torch.ones_like(batch['img'][n]).cpu() - DEFAULT_MEAN[:,None,None]/255) / (DEFAULT_STD[:,None,None]/255)
                 input_patch = batch['img'][n].cpu() * (DEFAULT_STD[:,None,None]/255) + (DEFAULT_MEAN[:,None,None]/255)
                 input_patch = input_patch.permute(1,2,0).numpy()
-                
-                # save camera
 
                 regression_img = renderer(out['pred_vertices'][n].detach().cpu().numpy(),
                                         out['pred_cam_t'][n].detach().cpu().numpy(),

@@ -137,7 +137,9 @@ class HAMER(pl.LightningModule):
                                                    focal_length=focal_length / self.cfg.MODEL.IMAGE_SIZE)
 
         output['pred_keypoints_2d'] = pred_keypoints_2d.reshape(batch_size, -1, 2)
+        output['transform_mat'] = self.get_transform_matrix(output)
         return output
+
 
     def compute_loss(self, batch: Dict, output: Dict, train: bool = True) -> torch.Tensor:
         """
@@ -353,3 +355,36 @@ class HAMER(pl.LightningModule):
         self.tensorboard_logging(batch, output, self.global_step, train=False)
 
         return output
+
+    def get_transform_matrix(self, output: Dict) -> torch.Tensor:
+        """
+        Create 4x4 transformation matrices from the model output
+        
+        Args:
+            output (Dict): Dictionary containing the regression output from forward_step
+            
+        Returns:
+            torch.Tensor: Batch of 4x4 transformation matrices (batch_size, 4, 4)
+        """
+        batch_size = output['pred_mano_params']['global_orient'].shape[0]
+        device = output['pred_mano_params']['global_orient'].device
+        dtype = output['pred_mano_params']['global_orient'].dtype
+        
+        # Get rotation from global_orient (already in rotation matrix form)
+        # Shape: (batch_size, 1, 3, 3) -> (batch_size, 3, 3)
+        rotation = output['pred_mano_params']['global_orient'].reshape(batch_size, 3, 3)
+        
+        # Get translation from pred_cam_t
+        # Shape: (batch_size, 3)
+        translation = output['pred_cam_t']
+        
+        # Create 4x4 transformation matrices
+        transform_mat = torch.eye(4, device=device, dtype=dtype).unsqueeze(0).repeat(batch_size, 1, 1)
+        
+        # Set rotation part (top-left 3x3)
+        transform_mat[:, :3, :3] = rotation
+        
+        # Set translation part (top-right 3x1)
+        transform_mat[:, :3, 3] = translation
+        
+        return transform_mat
