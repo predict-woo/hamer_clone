@@ -230,6 +230,7 @@ def main():
                 mesh_base_color=LIGHT_BLUE,
                 scene_bg_color=(1, 1, 1),
                 focal_length=scaled_focal_length,
+                name=os.path.join(args.out_folder, f'{img_fn}_all.obj'),
             )
             cam_view = renderer.render_rgba_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[n], is_right=all_right, **misc_args)
 
@@ -239,6 +240,9 @@ def main():
             input_img_overlay = input_img[:,:,:3] * (1-cam_view[:,:,3:]) + cam_view[:,:,:3] * cam_view[:,:,3:]
 
             cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all.jpg'), 255*input_img_overlay[:, :, ::-1])
+            
+            mask = renderer.render_mask_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[n], is_right=all_right, **misc_args)
+            cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all_mask.png'), 255*mask[:, :, ::-1])
 
 if __name__ == '__main__':
     main()

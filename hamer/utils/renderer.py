@@ -342,6 +342,7 @@ class Renderer:
             render_res=[256, 256],
             focal_length=None,
             is_right=None,
+            name="mesh",
         ):
 
         renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
@@ -354,6 +355,10 @@ class Renderer:
 
         if is_right is None:
             is_right = [1 for _ in range(len(vertices))]
+        
+        mesh_pre = [self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss) for vvv,ttt,sss in zip(vertices, cam_t, is_right)]
+        mesh_pre = trimesh.util.concatenate(mesh_pre)
+        mesh_pre.export(f"{name}.obj")
 
         mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss)) for vvv,ttt,sss in zip(vertices, cam_t, is_right)]
 
@@ -384,6 +389,8 @@ class Renderer:
         renderer.delete()
 
         return color
+    
+    
 
     def add_lighting(self, scene, cam_node, color=np.ones(3), intensity=1.0):
         # from phalp.visualize.py_renderer import get_light_poses
@@ -421,3 +428,79 @@ class Renderer:
             if scene.has_node(node):
                 continue
             scene.add_node(node)
+
+    def render_mask_multiple(
+            self,
+            vertices: List[np.array],
+            cam_t: List[np.array],
+            rot_axis=[1,0,0],
+            rot_angle=0,
+            render_res=[256, 256],
+            focal_length=None,
+            is_right=None,
+        ):
+        """
+        Renders a binary mask where hand regions are 0s and background is 1s.
+        
+        Args:
+            vertices: List of vertex arrays for multiple hands
+            cam_t: List of camera translations
+            rot_axis: Rotation axis for the meshes
+            rot_angle: Rotation angle in degrees
+            render_res: Resolution of the rendered image [width, height]
+            focal_length: Camera focal length (uses default if None)
+            is_right: List of flags indicating if each hand is right (1) or left (0)
+            
+        Returns:
+            Binary mask as numpy array where 0=hand, 1=background
+        """
+        renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
+                                              viewport_height=render_res[1],
+                                              point_size=1.0)
+
+        if is_right is None:
+            is_right = [1 for _ in range(len(vertices))]
+        
+        # Use a solid color for the meshes
+        mesh_base_color = (1.0, 1.0, 1.0)  # Color doesn't matter for mask
+        
+        # Create meshes for all hands
+        mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss)) 
+                    for vvv, ttt, sss in zip(vertices, cam_t, is_right)]
+
+        # Create scene with black background
+        scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0],
+                               ambient_light=(0.3, 0.3, 0.3))
+        
+        # Add all meshes to the scene
+        for i, mesh in enumerate(mesh_list):
+            scene.add(mesh, f'mesh_{i}')
+
+        # Set up camera
+        camera_pose = np.eye(4)
+        camera_center = [render_res[0] / 2., render_res[1] / 2.]
+        focal_length = focal_length if focal_length is not None else self.focal_length
+        camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
+                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+
+        # Add camera to scene
+        camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
+        scene.add_node(camera_node)
+        
+        # Add lighting
+        self.add_point_lighting(scene, camera_node)
+        self.add_lighting(scene, camera_node)
+        
+        light_nodes = create_raymond_lights()
+        for node in light_nodes:
+            scene.add_node(node)
+
+        # Render the scene
+        _, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+        renderer.delete()
+        
+        # Create binary mask: 0 where hands are present, 1 for background
+        mask = np.ones_like(rend_depth)
+        mask[rend_depth > 0] = 0  # Set to 0 where depth values exist (hand is present)
+        
+        return mask
