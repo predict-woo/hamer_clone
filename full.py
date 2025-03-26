@@ -15,6 +15,7 @@ LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
 
 from vitpose_model import ViTPoseModel
 
+
 import json
 from typing import Dict, Optional
 from hamer.utils.utils_detectron2 import DefaultPredictor_Lazy

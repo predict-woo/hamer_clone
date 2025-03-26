@@ -204,7 +204,7 @@ def find_optimal_focal_length(out1, out2, batch1, batch2):
         verts1 = create_vertices_wo_translation(out1, batch1)
         verts2 = create_vertices_wo_translation(out2, batch2)
         
-        for focal_length in range(400, 600, 10):
+        for focal_length in range(200, 400, 50):
             print(f"focal_length: {focal_length}")
             verts_cp1 = verts1.copy()
             verts_cp2 = verts2.copy()
@@ -212,10 +212,10 @@ def find_optimal_focal_length(out1, out2, batch1, batch2):
             verts_cp1 = concat_both_hands_verts(verts_cp1, batch1['right'])
             verts_cp2 = translate_verts(verts_cp2, focal_length, out2, batch2)
             verts_cp2 = concat_both_hands_verts(verts_cp2, batch2['right'])
-            # mesh1 = both_hands_verts_to_trimesh(verts_cp1)
-            # mesh2 = both_hands_verts_to_trimesh(verts_cp2)
-            # mesh1.export(f"mesh1_{focal_length}.obj")
-            # mesh2.export(f"mesh2_{focal_length}.obj")
+            mesh1 = both_hands_verts_to_trimesh(verts_cp1)
+            mesh2 = both_hands_verts_to_trimesh(verts_cp2)
+            mesh1.export(f"mesh1_{focal_length}.obj")
+            mesh2.export(f"mesh2_{focal_length}.obj")
             # try aligining the verts
             R, t, s, loss, transformed_source = umeyama_alignment(verts_cp1, verts_cp2)
             plot_alignment(transformed_source, verts_cp2, f"focal_length_alignment_{focal_length}.png", title=f"Focal Length: {focal_length}")
@@ -236,6 +236,7 @@ def draw_optimal_focal_length_graph():
         for row in reader:
             focal_lengths.append(float(row[0]))
             losses.append(float(row[1]))
+            
     plt.plot(focal_lengths, losses)
     plt.title("Loss vs Focal Length")
     plt.xlabel("Focal Length")

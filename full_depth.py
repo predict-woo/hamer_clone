@@ -1,8 +1,8 @@
 from coords import *
 import numpy as np
 import trimesh
-root_path = '/cluster/project/cvg/data/H2O'
-subject = 'subject4'
+root_path = '/local/home/andrye/dev/H2O'
+subject = 'subject1'
 exo_cam_id = 'cam2'
 ego_cam_id  ='cam4'
 
@@ -27,11 +27,24 @@ def depth2obj(depth_path, rgb_path, cam_int_path, cam_ext_path, prefix=None):
     pointcloud = trimesh.PointCloud(vertices=points, colors=colors)
     pointcloud.export(f'{prefix}_points.ply')
 
-    world_points = cam2world(points, R, t)
+    world_points = world2cam(points, R, t)
 
     # save as obj
     world_pointcloud = trimesh.PointCloud(vertices=world_points, colors=colors)
     world_pointcloud.export(f'{prefix}_points_world.ply')
+    
+    return world_points, colors
 
-depth2obj(exo_depth_path, exo_rgb_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
-depth2obj(ego_depth_path, ego_rgb_path, ego_cam_int_path, ego_cam_ext_path, 'ego')
+exo_world_points, exo_colors = depth2obj(exo_depth_path, exo_rgb_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
+ego_world_points, ego_colors = depth2obj(ego_depth_path, ego_rgb_path, ego_cam_int_path, ego_cam_ext_path, 'ego')
+
+# # concat 
+# world_points = np.concatenate([exo_world_points, ego_world_points], axis=0)
+# colors = np.concatenate([exo_colors, ego_colors], axis=0)
+
+# world_pointcloud = trimesh.PointCloud(vertices=world_points, colors=colors)
+# world_pointcloud.export('full_points.ply')
+
+# # save as numpy
+# np.save('exo_world_points.npy', exo_world_points)
+# np.save('ego_world_points.npy', ego_world_points)

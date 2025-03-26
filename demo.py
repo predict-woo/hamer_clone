@@ -241,8 +241,8 @@ def main():
 
             cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all.jpg'), 255*input_img_overlay[:, :, ::-1])
             
-            mask = renderer.render_mask_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[n], is_right=all_right, **misc_args)
-            cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all_mask.png'), 255*mask[:, :, ::-1])
+            mask = renderer.render_mask_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[n], is_right=all_right, focal_length=scaled_focal_length)
+            cv2.imwrite(os.path.join(args.out_folder, f'{img_fn}_all_mask.png'), 255*mask)
 
 if __name__ == '__main__':
     main()
