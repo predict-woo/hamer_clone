@@ -22,7 +22,7 @@ from hamer.utils.utils_detectron2 import DefaultPredictor_Lazy
 from detectron2.config import LazyConfig
 import hamer
 
-from coords import *
+from exo2ego import *
 
 def main():
     parser = argparse.ArgumentParser(description='HaMeR demo code')

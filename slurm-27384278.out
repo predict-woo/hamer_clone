@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/cluster/home/andrye/hamer/demo.py", line 8, in <module>
-    from hamer.configs import CACHE_DIR_HAMER
-  File "/cluster/home/andrye/hamer/hamer/configs/__init__.py", line 3, in <module>
-    from yacs.config import CfgNode as CN
-ModuleNotFoundError: No module named 'yacs'
