@@ -35,6 +35,7 @@ def depth2obj(depth_path, rgb_path, cam_int_path, cam_ext_path, prefix=None):
     
     return world_points, colors
 
+
 exo_world_points, exo_colors = depth2obj(exo_depth_path, exo_rgb_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
 ego_world_points, ego_colors = depth2obj(ego_depth_path, ego_rgb_path, ego_cam_int_path, ego_cam_ext_path, 'ego')
 

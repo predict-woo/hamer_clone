@@ -1,4 +1,4 @@
-from coords import *
+from exo2ego import *
 import numpy as np
 import trimesh
 import open3d as o3d
@@ -83,6 +83,9 @@ def depth2obj(depth_path, rgb_path, cam_int_path, cam_ext_path, prefix=None):
     points = depth2points(depth, fx, fy, cx, cy).reshape(-1, 3)
     
     colors = cv2.imread(rgb_path).reshape(-1, 3)
+    
+    # colors to [0, 1]
+    colors = colors / 255.0
 
     R = cam_ext[:3, :3]
     t = cam_ext[:3, 3:]
@@ -91,55 +94,74 @@ def depth2obj(depth_path, rgb_path, cam_int_path, cam_ext_path, prefix=None):
     
     return points, colors
 
+def create_masked_hand_pointcloud(depth_path, rgb_path, mask_path, cam_int_path, cam_ext_path, prefix=None):
+
+    
+    points, colors = depth2obj(depth_path, rgb_path, cam_int_path, cam_ext_path, prefix)
+    
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    mask = mask.astype(bool).reshape(-1)
+    points = points[~mask]
+    colors = colors[~mask]
+
+    
+    # create open3d pointcloud
+    pointcloud = o3d.geometry.PointCloud()
+    pointcloud.points = o3d.utility.Vector3dVector(points)
+    pointcloud.colors = o3d.utility.Vector3dVector(colors)
+    # save as ply
+    o3d.io.write_point_cloud(f'{prefix}_hand_pointcloud.ply', pointcloud)
 
 
-exo_points, exo_colors = depth2obj_masked(exo_depth_path, exo_rgb_path, exo_mask_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
+create_masked_hand_pointcloud(exo_depth_path, exo_rgb_path, exo_mask_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
 
-exo_pointcloud = o3d.geometry.PointCloud()
-exo_pointcloud.points = o3d.utility.Vector3dVector(exo_points)
+# exo_points, exo_colors = depth2obj_masked(exo_depth_path, exo_rgb_path, exo_mask_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
 
-point_count = exo_points.shape[0]
-print(exo_points.shape, exo_colors.shape)
+# exo_pointcloud = o3d.geometry.PointCloud()
+# exo_pointcloud.points = o3d.utility.Vector3dVector(exo_points)
 
-# mesh_exo.obj
-exo_mesh = o3d.io.read_triangle_mesh('mesh_exo.obj')
-exo_mesh.compute_vertex_normals()
-exo_mesh_pointcloud = exo_mesh.sample_points_uniformly(number_of_points=point_count)
+# point_count = exo_points.shape[0]
+# print(exo_points.shape, exo_colors.shape)
 
-reg_p2p = o3d.pipelines.registration.registration_icp(
-    exo_pointcloud, exo_mesh_pointcloud, 0.02, np.eye(4) * 1000,
-    o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000))
+# # mesh_exo.obj
+# exo_mesh = o3d.io.read_triangle_mesh('mesh_exo.obj')
+# exo_mesh.compute_vertex_normals()
+# exo_mesh_pointcloud = exo_mesh.sample_points_uniformly(number_of_points=point_count)
 
-exo_pointcloud.transform(reg_p2p.transformation)
+# reg_p2p = o3d.pipelines.registration.registration_icp(
+#     exo_pointcloud, exo_mesh_pointcloud, 0.02, np.eye(4) * 1000,
+#     o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+#     o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000))
 
-
-# color exo_mesh_pointcloud as red
-exo_mesh_pointcloud.paint_uniform_color([1, 0, 0])
-
-# color exo_pointcloud as green
-exo_pointcloud.paint_uniform_color([0, 1, 0])
-
-# save both pointclouds as single ply
-combined_pointcloud = o3d.geometry.PointCloud()
-combined_pointcloud.points = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_mesh_pointcloud.points), np.asarray(exo_pointcloud.points)], axis=0))
-combined_pointcloud.colors = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_mesh_pointcloud.colors), np.asarray(exo_pointcloud.colors)], axis=0))
+# exo_pointcloud.transform(reg_p2p.transformation)
 
 
-exo_full_points, exo_full_colors = depth2obj(exo_depth_path, exo_rgb_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
-exo_full_pointcloud = o3d.geometry.PointCloud()
-exo_full_pointcloud.points = o3d.utility.Vector3dVector(exo_full_points)
-exo_full_pointcloud.colors = o3d.utility.Vector3dVector(exo_full_colors)
+# # color exo_mesh_pointcloud as red
+# exo_mesh_pointcloud.paint_uniform_color([1, 0, 0])
 
-exo_full_pointcloud.transform(reg_p2p.transformation)
+# # color exo_pointcloud as green
+# exo_pointcloud.paint_uniform_color([0, 1, 0])
 
-# combine exo_full_pointcloud and combined_pointcloud
-combined_pointcloud.points = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_full_pointcloud.points), np.asarray(combined_pointcloud.points)], axis=0))
-combined_pointcloud.colors = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_full_pointcloud.colors), np.asarray(combined_pointcloud.colors)], axis=0))
+# # save both pointclouds as single ply
+# combined_pointcloud = o3d.geometry.PointCloud()
+# combined_pointcloud.points = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_mesh_pointcloud.points), np.asarray(exo_pointcloud.points)], axis=0))
+# combined_pointcloud.colors = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_mesh_pointcloud.colors), np.asarray(exo_pointcloud.colors)], axis=0))
+
+
+# exo_full_points, exo_full_colors = depth2obj(exo_depth_path, exo_rgb_path, exo_cam_int_path, exo_cam_ext_path, 'exo')
+# exo_full_pointcloud = o3d.geometry.PointCloud()
+# exo_full_pointcloud.points = o3d.utility.Vector3dVector(exo_full_points)
+# exo_full_pointcloud.colors = o3d.utility.Vector3dVector(exo_full_colors)
+
+# exo_full_pointcloud.transform(reg_p2p.transformation)
+
+# # combine exo_full_pointcloud and combined_pointcloud
+# combined_pointcloud.points = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_full_pointcloud.points), np.asarray(combined_pointcloud.points)], axis=0))
+# combined_pointcloud.colors = o3d.utility.Vector3dVector(np.concatenate([np.asarray(exo_full_pointcloud.colors), np.asarray(combined_pointcloud.colors)], axis=0))
 
 
 
-o3d.io.write_point_cloud('combined_pointcloud.ply', combined_pointcloud)
+# o3d.io.write_point_cloud('combined_pointcloud.ply', combined_pointcloud)
 
 
 # def draw_registration_result(source, target, transformation):
