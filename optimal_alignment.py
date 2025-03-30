@@ -1,17 +1,24 @@
 import numpy as np
 import pickle
-import open3d as o3d
 # demo_out/ego.png_out.npz
 
-from hamer.utils.renderer import Renderer, cam_crop_to_full
-from hamer.models import HAMER, download_models, load_hamer, DEFAULT_CHECKPOINT
 import torch
-import cv2
-from hamer.datasets.vitdet_dataset import ViTDetDataset, DEFAULT_MEAN, DEFAULT_STD
-from test_render import render_mano
 import trimesh
 
 LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
+
+
+def cam_crop_to_full(cam_bbox, box_center, box_size, img_size, focal_length=5000.):
+    # Convert cam_bbox to full image
+    img_w, img_h = img_size[:, 0], img_size[:, 1]
+    cx, cy, b = box_center[:, 0], box_center[:, 1], box_size
+    w_2, h_2 = img_w / 2., img_h / 2.
+    bs = b * cam_bbox[:, 0] + 1e-9
+    tz = 2 * focal_length / bs
+    tx = (2 * (cx - w_2) / bs) + cam_bbox[:, 1]
+    ty = (2 * (cy - h_2) / bs) + cam_bbox[:, 2]
+    full_cam = torch.stack([tx, ty, tz], dim=-1)
+    return full_cam
 
 
 def plot_alignment(transformed_source, target, name, title=None):

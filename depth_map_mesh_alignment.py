@@ -47,7 +47,9 @@ ego_cam_int_path = '/local/home/andrye/dev/H2O/subject1/h1/2/cam4/cam_intrinsics
 ego_cam_ext_path = '/local/home/andrye/dev/H2O/subject1/h1/2/cam4/cam_pose/000043.txt'
 ego_mask_path = 'demo_out/ego_all_mask.png'
 
-
+'''
+python process_images.py --images /local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png /local/home/andrye/dev/H2O/subject1/h1/2/cam4/rgb/000043.png --out_folder demo_out --batch_size=1 --side_view --save_mesh --full_frame --body_detector regnety
+'''
 
 def depth2obj_masked(depth_path, rgb_path, mask_path, cam_int_path, cam_ext_path, prefix=None):
     cam_int = np.loadtxt(cam_int_path)
