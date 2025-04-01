@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import trimesh
+import copy
+import open3d as o3d
 
 
 faces = np.load('config/model_mano_faces.npy')
@@ -189,20 +191,28 @@ def plot_alignment(transformed_source, target, name, title=None):
     plt.savefig(name, dpi=300)
     plt.close()
 
-def umeyama_alignment(source, target):
+def umeyama_alignment(source_pcd, target_pcd):
     """
-    Umeyama algorithm to find rotation, translation and scaling between two point sets.
+    Umeyama algorithm to find optimal transformation between two point clouds.
     
     Parameters:
-        source (np.ndarray): (N, D) array of source points.
-        target (np.ndarray): (N, D) array of target points.
+        source_pcd (o3d.geometry.PointCloud): Source point cloud.
+        target_pcd (o3d.geometry.PointCloud): Target point cloud.
     
     Returns:
-        R (np.ndarray): (D, D) rotation matrix.
-        t (np.ndarray): (D,) translation vector.
-        s (float): Scaling factor.
-        loss (float): Mean squared error between the aligned source and target points.
+        tuple: (transformation, loss, transformed_source_pcd)
+            - transformation (np.ndarray): 4×4 transformation matrix.
+            - loss (float): Mean squared error between the aligned source and target points.
+            - transformed_source_pcd (o3d.geometry.PointCloud): The transformed source point cloud.
     """
+    # Make copies to avoid modifying the originals
+    source_pcd = copy.deepcopy(source_pcd)
+    target_pcd = copy.deepcopy(target_pcd)
+    
+    # Get points as numpy arrays
+    source = np.asarray(source_pcd.points)
+    target = np.asarray(target_pcd.points)
+    
     # Get number of points and dimensions
     n, d = source.shape
     
@@ -235,8 +245,161 @@ def umeyama_alignment(source, target):
     # Calculate translation
     t = target_centroid - s * R @ source_centroid
 
-    # Compute alignment error (loss) as mean squared error between transformed source and target
-    transformed_source = s * (R @ source.T).T + t
-    loss = np.mean(np.sum((target - transformed_source) ** 2, axis=1))
+    # Create a transformation matrix from R, t, and s
+    transformation = np.eye(4)
+    transformation[:3, :3] = s * R
+    transformation[:3, 3] = t
     
-    return R, t, s, loss, transformed_source
+    # Apply transformation to create the transformed source point cloud
+    transformed_source_pcd = copy.deepcopy(source_pcd)
+    transformed_source_pcd.transform(transformation)
+    
+    # Compute alignment error (loss) as mean squared error
+    transformed_points = np.asarray(transformed_source_pcd.points)
+    loss = np.mean(np.sum((target - transformed_points) ** 2, axis=1))
+    
+    return transformation, loss, transformed_source_pcd
+
+
+def register_point_clouds(source_pcd, target_pcd, voxel_size=0.005, default_color=[0, 0.651, 0.929]):
+    """
+    Registers a source point cloud to a target point cloud using Mean Alignment + RANSAC + ICP.
+
+    Args:
+        source_pcd (o3d.geometry.PointCloud): Source point cloud to be aligned.
+        target_pcd (o3d.geometry.PointCloud): Target point cloud to align to.
+        voxel_size (float): Voxel size for downsampling and normal/feature estimation.
+        default_color (list): RGB color (0-1 range) to paint the source cloud if it lacks colors.
+
+    Returns:
+        tuple: (transformed_source_pcd, final_transformation)
+            - transformed_source_pcd (o3d.geometry.PointCloud): The source point cloud after alignment.
+            - final_transformation (np.ndarray): The 4x4 transformation matrix combining all steps.
+    """
+    print(f"\nStarting registration with voxel size: {voxel_size}")
+
+    # Make copies to avoid modifying the originals
+    source_pcd = copy.deepcopy(source_pcd)
+    target_pcd = copy.deepcopy(target_pcd)
+    
+    # --- Initial Mean Alignment ---
+    print("Performing initial mean alignment...")
+    source_points = np.asarray(source_pcd.points)
+    target_points = np.asarray(target_pcd.points)
+    
+    source_mean = np.mean(source_points, axis=0)
+    target_mean = np.mean(target_points, axis=0)
+    translation_vector = target_mean - source_mean
+    
+    # Create a 4x4 transformation matrix for the mean alignment
+    mean_alignment_transform = np.eye(4)
+    mean_alignment_transform[:3, 3] = translation_vector
+    
+    # Apply translation directly to the source point cloud
+    source_pcd.translate(translation_vector)
+    print(f"Applied translation vector: {translation_vector}")
+    # --- End Mean Alignment ---
+
+    # Add uniform color if the point clouds don't have colors
+    if not source_pcd.has_colors():
+        source_pcd.paint_uniform_color(default_color)
+    if not target_pcd.has_colors():
+        target_pcd.paint_uniform_color(default_color)
+
+    # --- Global Registration (RANSAC) ---
+    print("Downsampling point clouds...")
+    source_down = source_pcd.voxel_down_sample(voxel_size)
+    target_down = target_pcd.voxel_down_sample(voxel_size)
+
+    radius_normal = voxel_size * 2
+    print("Estimating normals for RANSAC...")
+    source_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+    target_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+    print("Normals estimated for RANSAC.")
+
+    radius_feature = voxel_size * 5
+    print("Computing FPFH features...")
+    source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        source_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
+    target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        target_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
+    print("FPFH features computed.")
+
+    distance_threshold_global = voxel_size * 1.5
+    print("Running RANSAC...")
+    result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down, target_down, source_fpfh, target_fpfh, True,
+        distance_threshold_global,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        3, [
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold_global)
+        ], o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999))
+    print("RANSAC finished.")
+    print("Global registration (RANSAC) fitness:", result_ransac.fitness)
+    print("Global registration (RANSAC) inlier_rmse:", result_ransac.inlier_rmse)
+
+    if result_ransac.fitness < 0.1: # Add a check if RANSAC failed significantly
+         print("Warning: RANSAC fitness is low. ICP might fail or be inaccurate.")
+         # Optionally return None or raise an error if RANSAC fails badly
+         # return None, np.identity(4)
+
+    # --- Fine-tuning with ICP ---
+    # Estimate normals for the original point clouds before ICP
+    print("Estimating normals for ICP...")
+    # Ensure normals are estimated for both, PointToPlane benefits from source normals too
+    source_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+    target_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+    print("Normals estimated for ICP.")
+
+    distance_threshold_icp = voxel_size * 0.4
+    print("Running ICP...")
+    result_icp = o3d.pipelines.registration.registration_icp(
+        source_pcd, target_pcd, distance_threshold_icp, result_ransac.transformation, # Use RANSAC result as initial guess
+        o3d.pipelines.registration.TransformationEstimationPointToPlane())
+    print("ICP finished.")
+    print("ICP Fitness:", result_icp.fitness)
+    print("ICP Inlier RMSE:", result_icp.inlier_rmse)
+
+    # ICP transformation (which already includes RANSAC as initial guess)
+    icp_transformation = result_icp.transformation
+    
+    # Apply the ICP transformation to the source point cloud
+    source_pcd.transform(icp_transformation)
+    
+    # Combine transformations: first mean alignment, then ICP
+    # The order is important: final_T = T_icp @ T_mean
+    final_transformation = np.matmul(icp_transformation, mean_alignment_transform)
+
+    print("Registration complete.")
+    return source_pcd, final_transformation
+
+
+def depth2pcd(depth, rgb, cam_int, cam_ext, mask=None):
+    fx, fy, cx, cy = cam_int[:4]
+    # cam_ext = np.loadtxt(cam_ext_path).reshape(4, 4)
+    points = depth2points(depth, fx, fy, cx, cy).reshape(-1, 3)
+    
+    if mask is not None:
+        mask = mask.astype(bool).reshape(-1)
+        points = points[~mask]
+
+    
+    colors = rgb.reshape(-1, 3)
+    
+    if mask is not None:
+        colors = colors[~mask]
+    
+    # colors between 0 and 1
+    colors = colors / 255.0
+
+    # R = cam_ext[:3, :3]
+    # t = cam_ext[:3, 3:]
+
+    points /= 1000
+    
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    
+    return pcd

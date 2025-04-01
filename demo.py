@@ -78,6 +78,8 @@ def main():
     # Iterate over all images in folder
     for img_path in img_paths:
         
+        out_name = 
+        
         image_name = os.path.basename(img_path)
         
         img_cv2 = cv2.imread(str(img_path))

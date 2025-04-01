@@ -13,7 +13,7 @@ python demo.py \
 
 
 python process_images.py \
-    --images example_data/subject1/h1/2/cam2/rgb/000043.png \
+    --images  \
     --out_folder demo_out \
     --batch_size=1 --side_view --save_mesh --full_frame --body_detector regnety
 

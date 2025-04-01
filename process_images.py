@@ -7,6 +7,7 @@ import os
 import cv2
 import numpy as np
 import open3d as o3d
+import copy
 
 from hamer.configs import CACHE_DIR_HAMER
 from hamer.models import HAMER, download_models, load_hamer, DEFAULT_CHECKPOINT
@@ -17,9 +18,8 @@ import pickle
 LIGHT_BLUE=(0.65098039,  0.74117647,  0.85882353)
 
 from vitpose_model import ViTPoseModel
-from tools import umeyama_alignment, depth2points
+from tools import umeyama_alignment, depth2points, register_point_clouds, depth2pcd
 from scipy.optimize import minimize_scalar
-
 '''
 python process_images.py --ego_image /local/home/andrye/dev/H2O/subject1/h1/2/cam4/rgb/000043.png --exo_image /local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png --out_folder demo_out
 '''
@@ -126,9 +126,9 @@ def concat_both_hands_verts(verts, is_right):
         second = verts[0]
     return np.concatenate([first, second], axis=0)
 
-def hands_to_mesh(verts, model, mesh_base_color=(1.0, 1.0, 0.9)):
-    faces_left = model.mano.faces[:,[0,2,1]]
-    faces_right = model.mano.faces
+def hands_to_mesh(verts, mano_faces, mesh_base_color=(1.0, 1.0, 0.9)):
+    faces_left = mano_faces[:,[0,2,1]]
+    faces_right = mano_faces
     vertex_colors = np.array([mesh_base_color] * verts.shape[0])
     both_hands_faces = np.concatenate([faces_right, faces_left + verts.shape[0] // 2], axis=0)
     mesh = o3d.geometry.TriangleMesh()
@@ -193,15 +193,19 @@ def process_image(img_cv2, model, model_cfg, device, detector, cpm, renderer, ou
 def compute_alignment_loss(focal_length, ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right,
                            exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right):
     """Computes the Umeyama alignment loss for a given focal length."""
-    # Ensure tensors are detached and moved to CPU if necessary
-    ego_pred_cam_t = cam_crop_to_full(ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, focal_length).detach().cpu().numpy()
-    exo_pred_cam_t = cam_crop_to_full(exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, focal_length).detach().cpu().numpy()
-    ego_verts_t = ego_ret_verts.detach().cpu().numpy() + ego_pred_cam_t[:,None,:]
-    exo_verts_t = exo_ret_verts.detach().cpu().numpy() + exo_pred_cam_t[:,None,:]
-    ego_verts_t = concat_both_hands_verts(ego_verts_t, ego_is_right.cpu().numpy()) # Ensure is_right is numpy
-    exo_verts_t = concat_both_hands_verts(exo_verts_t, exo_is_right.cpu().numpy()) # Ensure is_right is numpy
-    # Assuming umeyama_alignment returns: R, t, s, loss, transformed_source
-    _, _, _, loss, _ = umeyama_alignment(ego_verts_t, exo_verts_t)
+    # Convert vertices using the helper function
+    ego_pcd = convert_to_global_vertices(
+        ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right, 
+        focal_length, as_pcd=True
+    )
+    
+    exo_pcd = convert_to_global_vertices(
+        exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right, 
+        focal_length, as_pcd=True
+    )
+    
+    # Use the updated umeyama_alignment function that works with point clouds
+    _, loss, _ = umeyama_alignment(ego_pcd, exo_pcd)
     return loss
 
 def rgb_path_to_rest(rgb_path_str):
@@ -223,29 +227,39 @@ def load_from_rgb_path(rgb_path_str):
     cam_ext = np.loadtxt(cam_ext_path).reshape(4, 4)
     return depth, rgb, cam_int, cam_ext
 
-
-def depth2obj_masked(depth, rgb, mask, cam_int, cam_ext):
-    fx, fy, cx, cy = cam_int[:4]
-    # cam_ext = np.loadtxt(cam_ext_path).reshape(4, 4)
-    points = depth2points(depth, fx, fy, cx, cy).reshape(-1, 3)
+def convert_to_global_vertices(pred_cam, box_center, box_size, img_size, ret_verts, is_right, focal_length, as_pcd=False):
+    """
+    Convert predicted camera parameters and vertices to global space and combine both hands.
     
-    mask = mask.astype(bool).reshape(-1)
-    points = points[~mask]
-
+    Args:
+        pred_cam (torch.Tensor): Camera prediction tensor.
+        box_center (torch.Tensor): Box center coordinates.
+        box_size (torch.Tensor): Box size.
+        img_size (torch.Tensor): Image dimensions.
+        ret_verts (torch.Tensor): Predicted vertices.
+        is_right (torch.Tensor): Hand orientation indicators (1 for right, 0 for left).
+        focal_length (float): Focal length for camera conversion.
+        as_pcd (bool, optional): Whether to return as Open3D point cloud. Default: False.
+        
+    Returns:
+        Either numpy array of vertices or Open3D point cloud, depending on as_pcd parameter.
+    """
+    # Convert camera parameters to full image coordinates
+    pred_cam_t = cam_crop_to_full(pred_cam, box_center, box_size, img_size, focal_length).detach().cpu().numpy()
     
-    colors = rgb.reshape(-1, 3)
-    colors = colors[~mask]
+    # Transform vertices to global space
+    verts_t = ret_verts.detach().cpu().numpy() + pred_cam_t[:,None,:]
     
-    # colors between 0 and 1
-    colors = colors / 255.0
-
-    # R = cam_ext[:3, :3]
-    # t = cam_ext[:3, 3:]
-
-    points /= 1000
+    # Combine both hands ensuring right hand comes first
+    mano_verts = concat_both_hands_verts(verts_t, is_right.cpu().numpy())
     
-    return points, colors
-
+    # Optionally convert to point cloud
+    if as_pcd:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(mano_verts)
+        return pcd
+    
+    return mano_verts
 
 def main():
     parser = argparse.ArgumentParser(description='HaMeR demo code')
@@ -264,22 +278,21 @@ def main():
     ego_ret_verts, ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_is_right, ego_mask = process_image(ego_img, model, model_cfg, device, detector, cpm, renderer, args.out_folder, 'ego')
     exo_ret_verts, exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_is_right, exo_mask = process_image(exo_img, model, model_cfg, device, detector, cpm, renderer, args.out_folder, 'exo')
     
-    # Define bounds for the focal length search (adjust if needed)
-    # Avoid 0 as focal length is usually positive.
+    # Define bounds for the focal length search
     focal_length_bounds = (1, 5000)
 
-    # Package arguments for the loss function (excluding focal_length)
+    # Package arguments for the loss function
     loss_args = (
         ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right,
         exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right
     )
 
-    # Use minimize_scalar to find the optimal focal length
+    # Find the optimal focal length
     result = minimize_scalar(
         compute_alignment_loss,
         bounds=focal_length_bounds,
         args=loss_args,
-        method='bounded' # Use bounded optimization
+        method='bounded'
     )
 
     if result.success:
@@ -288,139 +301,113 @@ def main():
         print(f"Optimization successful.")
     else:
         print(f"Optimization failed: {result.message}. Using best found value or default.")
-        # Handle optimization failure, e.g., use the found value or a default
-        min_loss_focal_length = result.x # Best value found during optimization attempt
-        # Recalculate loss just in case result.fun is not reliable on failure
+        min_loss_focal_length = result.x
         min_loss = compute_alignment_loss(min_loss_focal_length, *loss_args)
-        # Alternatively, consider using a default focal length from model_cfg if available
-        # min_loss_focal_length = model_cfg.EXTRA.FOCAL_LENGTH
-        # min_loss = compute_alignment_loss(min_loss_focal_length, *loss_args)
 
-    # run the optimal alignment using the found focal length
-    ego_pred_cam_t = cam_crop_to_full(ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, min_loss_focal_length).detach().cpu().numpy()
-    exo_pred_cam_t = cam_crop_to_full(exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, min_loss_focal_length).detach().cpu().numpy()
-    ego_verts_t = ego_ret_verts.detach().cpu().numpy() + ego_pred_cam_t[:,None,:]
-    exo_verts_t = exo_ret_verts.detach().cpu().numpy() + exo_pred_cam_t[:,None,:]
-    ego_mano_verts = concat_both_hands_verts(ego_verts_t, ego_is_right.cpu().numpy()) # Ensure is_right is numpy
-    exo_mano_verts = concat_both_hands_verts(exo_verts_t, exo_is_right.cpu().numpy()) # Ensure is_right is numpy
+    # Run the optimal alignment using the found focal length
+    ego_mano_verts = convert_to_global_vertices(
+        ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right, 
+        min_loss_focal_length
+    )
+    exo_mano_verts = convert_to_global_vertices(
+        exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right, 
+        min_loss_focal_length
+    )
 
-    # save the meshes as single obj file
-    ego_mano_mesh = hands_to_mesh(ego_mano_verts, model)
-    exo_mano_mesh = hands_to_mesh(exo_mano_verts, model)
+    # Create meshes from the vertices
+    ego_mano_mesh = hands_to_mesh(ego_mano_verts, model.mano.faces)
+    exo_mano_mesh = hands_to_mesh(exo_mano_verts, model.mano.faces)
     
     o3d.io.write_triangle_mesh(f"{args.out_folder}/mesh_exo.obj", exo_mano_mesh)
     o3d.io.write_triangle_mesh(f"{args.out_folder}/mesh_ego.obj", ego_mano_mesh)
 
-    # Get the final alignment transformation for reference if needed
-    R, t, s, final_loss, transformed_source = umeyama_alignment(ego_mano_verts, exo_mano_verts)
-    print(f"Final Alignment Loss (at optimal focal length): {final_loss}") # This should match min_loss
+    # Create point clouds for alignment
+    ego_mano_pcd = o3d.geometry.PointCloud()
+    ego_mano_pcd.points = o3d.utility.Vector3dVector(ego_mano_verts)
+    
+    exo_mano_pcd = o3d.geometry.PointCloud()
+    exo_mano_pcd.points = o3d.utility.Vector3dVector(exo_mano_verts)
+
+    # Get the final alignment transformation and transformed point cloud
+    alignment_transform, final_loss, transformed_ego_pcd = umeyama_alignment(ego_mano_pcd, exo_mano_pcd)
+    print(f"Final Alignment Loss (at optimal focal length): {final_loss}")
 
     print(f"Optimal Focal length: {min_loss_focal_length:.2f}")
     
-    
-    # /local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png
-    # /local/home/andrye/dev/H2O/subject1/h1/2/cam2/depth/000043.png
-    # /local/home/andrye/dev/H2O/subject1/h1/2/cam2/cam_intrinsics.txt
-    # /local/home/andrye/dev/H2O/subject1/h1/2/cam2/cam_pose/000043.txt
-    # /local/home/andrye/dev/H2O/subject1/h1/2/cam2/mask/000043.png
-    # exo_depth_path, exo_cam_int_path, exo_cam_ext_path, exo_mask_path = rgb_path_to_rest(args.exo_image)
-
+    # Load depth data and create point clouds
     ego_depth, ego_rgb, ego_cam_int, ego_cam_ext = load_from_rgb_path(args.ego_image)
-    ego_points, ego_colors = depth2obj_masked(ego_depth, ego_rgb, ego_mask, ego_cam_int, ego_cam_ext)
-    # exo_points, exo_colors = depth2obj_masked(exo_depth_path, args.exo_image, exo_mask_path, exo_cam_int_path, exo_cam_ext_path)
+    exo_depth, exo_rgb, exo_cam_int, exo_cam_ext = load_from_rgb_path(args.exo_image)
+    ego_pcd = depth2pcd(ego_depth, ego_rgb, ego_cam_int, ego_cam_ext, mask=ego_mask)
+    exo_pcd = depth2pcd(exo_depth, exo_rgb, exo_cam_int, exo_cam_ext, mask=exo_mask)
     
-    # uniform sample same number of points as ego_points from ego_mano_mesh
-    ego_mano_pcd = ego_mano_mesh.sample_points_uniformly(number_of_points=ego_points.shape[0])
-    ego_mano_sampled_points = np.asarray(ego_mano_pcd.points)
+    # Uniform sample same number of points from MANO meshes
+    ego_mano_pcd = ego_mano_mesh.sample_points_uniformly(number_of_points=len(ego_pcd.points))
+    exo_mano_pcd = exo_mano_mesh.sample_points_uniformly(number_of_points=len(exo_pcd.points))
 
-    # traslate ego_mano_sampled_points to ego_points so mean of points is the same
-    ego_mano_sampled_points_mean = np.mean(ego_mano_sampled_points, axis=0)
-    ego_points_mean = np.mean(ego_points, axis=0)
-    translation_vector = ego_points_mean - ego_mano_sampled_points_mean
-    ego_mano_sampled_points = ego_mano_sampled_points + translation_vector
-
-    # --- Start of O3D Registration ---
-
-    # Create Open3D point clouds
-    ego_pcd = o3d.geometry.PointCloud()
-    ego_pcd.points = o3d.utility.Vector3dVector(ego_points)
-    ego_pcd.colors = o3d.utility.Vector3dVector(ego_colors) # Assuming ego_colors are loaded and are 0-1
-
-    ego_mano_pcd = o3d.geometry.PointCloud()
-    ego_mano_pcd.points = o3d.utility.Vector3dVector(ego_mano_sampled_points)
-    # Assign a color for visualization (e.g., blue)
-    ego_mano_pcd.paint_uniform_color([0, 0.651, 0.929])
-
-    # Define voxel size for downsampling and feature calculation (adjust as needed)
-    voxel_size = 0.005 # meters
-
-    # --- Global Registration (RANSAC) ---
-    source_down = ego_mano_pcd.voxel_down_sample(voxel_size)
-    target_down = ego_pcd.voxel_down_sample(voxel_size)
-
-    radius_normal = voxel_size * 2
-    source_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
-    target_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
-
-    radius_feature = voxel_size * 5
-    source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-        source_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
-    target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-        target_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
-
-    distance_threshold_global = voxel_size * 1.5
-    result_ransac = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-        source_down, target_down, source_fpfh, target_fpfh, True,
-        distance_threshold_global,
-        o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-        3, [
-            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold_global)
-        ], o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999))
-
-    print("Global registration (RANSAC) fitness:", result_ransac.fitness)
-    print("Global registration (RANSAC) inlier_rmse:", result_ransac.inlier_rmse)
+    # Register point clouds
+    print("\n--- Registering EGO View ---")
+    aligned_ego_mano_pcd, ego_transformation = register_point_clouds(
+        source_pcd=ego_mano_pcd,
+        target_pcd=ego_pcd
+    )
+    
+    print("\n--- Registering EXO View ---")
+    aligned_exo_mano_pcd, exo_transformation = register_point_clouds(
+        source_pcd=exo_mano_pcd,
+        target_pcd=exo_pcd
+    )
+    
+    # Combine and save point clouds
+    combined_ego_pcd = ego_pcd + aligned_ego_mano_pcd
+    combined_ego_ply_path = f"{args.out_folder}/combined_aligned_ego_pcd.ply"
+    o3d.io.write_point_cloud(combined_ego_ply_path, combined_ego_pcd)
+    
+    combined_exo_pcd = exo_pcd + aligned_exo_mano_pcd
+    combined_exo_ply_path = f"{args.out_folder}/combined_aligned_exo_pcd.ply"
+    o3d.io.write_point_cloud(combined_exo_ply_path, combined_exo_pcd)
+    
+    print(f"Saved combined EGO point cloud to {combined_ego_ply_path}")
+    print(f"Saved combined EXO point cloud to {combined_exo_ply_path}")
 
 
-    # --- Fine-tuning with ICP ---
-    # Estimate normals for the original point clouds before ICP (PointToPlane requires target normals)
-    print("Estimating normals for ICP...")
-    ego_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
-    ego_mano_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
-    print("Normals estimated.")
+    # check each transformation chain
+    check_mano_transform = copy.deepcopy(ego_mano_pcd).transform(alignment_transform) + copy.deepcopy(exo_mano_pcd)
+    o3d.io.write_point_cloud(f"{args.out_folder}/check_mano_transform.ply", check_mano_transform)
 
-    distance_threshold_icp = voxel_size * 0.4
-    result_icp = o3d.pipelines.registration.registration_icp(
-        ego_mano_pcd, ego_pcd, distance_threshold_icp, result_ransac.transformation, # Use RANSAC result as initial guess
-        o3d.pipelines.registration.TransformationEstimationPointToPlane()) # Point-to-plane is often more robust
 
-    print("ICP Fitness:", result_icp.fitness)
-    print("ICP Inlier RMSE:", result_icp.inlier_rmse)
+    check_ego_transform = copy.deepcopy(ego_mano_pcd).transform(ego_transformation) + copy.deepcopy(ego_pcd)
+    o3d.io.write_point_cloud(f"{args.out_folder}/check_ego_transform.ply", check_ego_transform)
+    
+    check_exo_transform = copy.deepcopy(exo_mano_pcd).transform(exo_transformation) + copy.deepcopy(exo_pcd)
+    o3d.io.write_point_cloud(f"{args.out_folder}/check_exo_transform.ply", check_exo_transform)
 
-    # Apply the final transformation to the original resolution MANO point cloud
-    ego_mano_pcd.transform(result_icp.transformation)
 
-    # --- End of O3D Registration ---
+    # Calculate the transformation chain
+    # Step 1: Get the inverse of ego_transformation
+    ego_transformation_inv = np.linalg.inv(ego_transformation)
+    
+    # Step 2: Compute the complete transformation chain
+    # T_chain = T₃ × T₂ × T₁ = exo_transformation × alignment_transform × inv(ego_transformation)
+    transformation_chain = np.matmul(exo_transformation, np.matmul(alignment_transform, ego_transformation_inv))
+    
+    # Step 3: Apply the transformation chain to ego_pcd
+    transformed_ego_pcd = copy.deepcopy(ego_pcd).transform(transformation_chain)
+    
+    # Visualize and save the result
+    combined_transformed_pcd = transformed_ego_pcd + exo_pcd
+    o3d.io.write_point_cloud(f"{args.out_folder}/ego_to_exo_transformed.ply", combined_transformed_pcd)
+    
+    print(f"Transformation chain computed and applied.")
+    print(f"Saved transformed point cloud to {args.out_folder}/ego_to_exo_transformed.ply")
 
-    # Combine the target (depth) point cloud and the aligned MANO point cloud
-    # ego_pcd already has colors from the RGB image.
-    # ego_mano_pcd was painted blue earlier.
-    combined_pcd = ego_pcd + ego_mano_pcd
+    ego_total_pcd = depth2pcd(ego_depth, ego_rgb, ego_cam_int, ego_cam_ext)
+    exo_total_pcd = depth2pcd(exo_depth, exo_rgb, exo_cam_int, exo_cam_ext)
 
-    # Save the combined point cloud
-    combined_ply_path = f"{args.out_folder}/combined_aligned_pcd.ply"
-    o3d.io.write_point_cloud(combined_ply_path, combined_pcd)
-    print(f"Saved combined point cloud (depth + aligned MANO) to {combined_ply_path}")
-
-    # Optional: Save the aligned mano point cloud separately if still needed
-    # o3d.io.write_point_cloud(f"{args.out_folder}/aligned_ego_mano.ply", ego_mano_pcd)
-    # print(f"Saved aligned MANO point cloud to {args.out_folder}/aligned_ego_mano.ply")
-
-    # Optional: Visualize the result
-    # o3d.visualization.draw_geometries([combined_pcd]) # Draw the combined point cloud
-    # Or visualize separately:
-    # o3d.visualization.draw_geometries([ego_pcd, ego_mano_pcd]) # Draw target (ego_points) and transformed source (mano)
-
+    # Uniform sample same number of points from MANO meshes
+    transformed_ego_pcd = ego_total_pcd.transform(transformation_chain)
+    
+    combined_pcd = transformed_ego_pcd + exo_total_pcd
+    o3d.io.write_point_cloud(f"{args.out_folder}/combined_pcd.ply", combined_pcd)
 
 if __name__ == '__main__':
     main()
