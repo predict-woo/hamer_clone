@@ -516,37 +516,6 @@ def main():
     o3d.io.write_point_cloud(f"{args.out_folder}/combined_pcd.ply", combined_total_pcd)
     print(f"Saved combined point cloud to {args.out_folder}/combined_pcd.ply")
 
-    exo_rgb_path = "/local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png"
-    exo_cam_id = "cam2"
-    ego_cam_id = "cam4"
-
-    exo_rgb_path = exo_rgb_path.replace(exo_cam_id, exo_cam_id)
-    exo_depth_path = exo_rgb_path.replace("rgb", "depth")
-    exo_rgb_id = os.path.join("rgb", exo_rgb_path.split("/")[-1])
-    exo_cam_int_path = exo_rgb_path.replace(exo_rgb_id, "cam_intrinsics.txt")
-    exo_cam_ext_path = exo_rgb_path.replace("rgb", "cam_pose").replace("png", "txt")
-    exo_hand_path = exo_rgb_path.replace("rgb", "hand_pose").replace("png", "txt")
-    # egos
-    ego_cam_int_path = exo_cam_int_path.replace(exo_cam_id, ego_cam_id)
-    ego_cam_ext_path = exo_cam_ext_path.replace(exo_cam_id, ego_cam_id)
-    ego_hand_path = exo_hand_path.replace(exo_cam_id, ego_cam_id)
-    ego_rgb_pred = exo2ego(
-        exo_rgb_path,
-        exo_depth_path,
-        exo_cam_int_path,
-        exo_cam_ext_path,
-        exo_hand_path,
-        ego_cam_int_path,
-        ego_cam_ext_path,
-        ego_hand_path,
-        np.linalg.inv(transformation_chain),
-    )
-    # vis
-    exo_rgb_gt = cv2.imread(exo_rgb_path)
-    ego_rgb_gt = cv2.imread(exo_rgb_path.replace(exo_cam_id, ego_cam_id))
-    cv2.imwrite("vis_sparse_ego.png", ego_rgb_pred)
-    print(f"Saved vis_sparse_ego.png to {args.out_folder}")
-
 
 if __name__ == "__main__":
     main()
