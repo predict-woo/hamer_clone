@@ -19,25 +19,26 @@ from hamer.utils import recursive_to
 from hamer.datasets.vitdet_dataset import ViTDetDataset
 from hamer.utils.renderer import Renderer, cam_crop_to_full
 from vitpose_model import ViTPoseModel
-from tools import umeyama_alignment, depth2pcd, register_point_clouds
+from tools import *
 
 # Constants
 LIGHT_BLUE = (0.65098039, 0.74117647, 0.85882353)
 DEFAULT_FOCAL_LENGTH_BOUNDS = (1, 5000)
 DEFAULT_CONFIDENCE_THRESHOLD = 0.5
-DEFAULT_OUTPUT_FOLDER = 'out_demo'
+DEFAULT_OUTPUT_FOLDER = "out_demo"
 
-'''
+"""
 python process_images.py --ego_image /local/home/andrye/dev/H2O/subject1/h1/2/cam4/rgb/000043.png --exo_image /local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png --out_folder demo_out
-'''
+"""
+
 
 def initialize(args):
     """
     Initialize models, detector, and renderer.
-    
+
     Args:
         args: Command line arguments
-        
+
     Returns:
         tuple: (model, model_cfg, device, detector, cpm, renderer)
     """
@@ -48,50 +49,61 @@ def initialize(args):
     model, model_cfg = load_hamer(args.checkpoint)
 
     # Setup HaMeR model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
 
     # Load detector
     from hamer.utils.utils_detectron2 import DefaultPredictor_Lazy
-    if args.body_detector == 'vitdet':
+
+    if args.body_detector == "vitdet":
         from detectron2.config import LazyConfig
         import hamer
-        cfg_path = Path(hamer.__file__).parent/'configs'/'cascade_mask_rcnn_vitdet_h_75ep.py'
+
+        cfg_path = (
+            Path(hamer.__file__).parent
+            / "configs"
+            / "cascade_mask_rcnn_vitdet_h_75ep.py"
+        )
         detectron2_cfg = LazyConfig.load(str(cfg_path))
         detectron2_cfg.train.init_checkpoint = "https://dl.fbaipublicfiles.com/detectron2/ViTDet/COCO/cascade_mask_rcnn_vitdet_h/f328730692/model_final_f05665.pkl"
         for i in range(3):
             detectron2_cfg.model.roi_heads.box_predictors[i].test_score_thresh = 0.25
         detector = DefaultPredictor_Lazy(detectron2_cfg)
-    elif args.body_detector == 'regnety':
+    elif args.body_detector == "regnety":
         from detectron2 import model_zoo
         from detectron2.config import get_cfg
-        detectron2_cfg = model_zoo.get_config('new_baselines/mask_rcnn_regnety_4gf_dds_FPN_400ep_LSJ.py', trained=True)
+
+        detectron2_cfg = model_zoo.get_config(
+            "new_baselines/mask_rcnn_regnety_4gf_dds_FPN_400ep_LSJ.py", trained=True
+        )
         detectron2_cfg.model.roi_heads.box_predictor.test_score_thresh = 0.5
         detectron2_cfg.model.roi_heads.box_predictor.test_nms_thresh = 0.4
         detector = DefaultPredictor_Lazy(detectron2_cfg)
 
     torch.cuda.empty_cache()
-    
+
     # Initialize keypoint detector
     cpm = ViTPoseModel(device)
 
     # Setup the renderer
     renderer = Renderer(model_cfg, faces=model.mano.faces)
-    
+
     return model, model_cfg, device, detector, cpm, renderer
 
 
-def vit_pose_detection(img, detector, cpm, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD):
+def vit_pose_detection(
+    img, detector, cpm, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD
+):
     """
     Detect human hand keypoints in the image.
-    
+
     Args:
         img (np.ndarray): Input image in BGR format
         detector: Object detector model
         cpm: Keypoint detector model
         confidence_threshold (float): Confidence threshold for keypoint detection
-        
+
     Returns:
         tuple: (bboxes, is_right_hand_flags)
     """
@@ -99,8 +111,10 @@ def vit_pose_detection(img, detector, cpm, confidence_threshold=DEFAULT_CONFIDEN
     det_out = detector(img)
     img_rgb = img.copy()[:, :, ::-1]  # Convert BGR to RGB
 
-    det_instances = det_out['instances']
-    valid_idx = (det_instances.pred_classes==0) & (det_instances.scores > confidence_threshold)
+    det_instances = det_out["instances"]
+    valid_idx = (det_instances.pred_classes == 0) & (
+        det_instances.scores > confidence_threshold
+    )
     pred_bboxes = det_instances.pred_boxes.tensor[valid_idx].cpu().numpy()
     pred_scores = det_instances.scores[valid_idx].cpu().numpy()
 
@@ -114,22 +128,32 @@ def vit_pose_detection(img, detector, cpm, confidence_threshold=DEFAULT_CONFIDEN
     is_right = []
 
     for vitposes in vitposes_out:
-        left_hand_keyp = vitposes['keypoints'][-42:-21]
-        right_hand_keyp = vitposes['keypoints'][-21:]
+        left_hand_keyp = vitposes["keypoints"][-42:-21]
+        right_hand_keyp = vitposes["keypoints"][-21:]
 
         # Process left hand keypoints
         keyp = left_hand_keyp
-        valid = keyp[:,2] > confidence_threshold
+        valid = keyp[:, 2] > confidence_threshold
         if sum(valid) > 3:
-            bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
+            bbox = [
+                keyp[valid, 0].min(),
+                keyp[valid, 1].min(),
+                keyp[valid, 0].max(),
+                keyp[valid, 1].max(),
+            ]
             bboxes.append(bbox)
             is_right.append(0)
-            
+
         # Process right hand keypoints
         keyp = right_hand_keyp
-        valid = keyp[:,2] > confidence_threshold
+        valid = keyp[:, 2] > confidence_threshold
         if sum(valid) > 3:
-            bbox = [keyp[valid,0].min(), keyp[valid,1].min(), keyp[valid,0].max(), keyp[valid,1].max()]
+            bbox = [
+                keyp[valid, 0].min(),
+                keyp[valid, 1].min(),
+                keyp[valid, 0].max(),
+                keyp[valid, 1].max(),
+            ]
             bboxes.append(bbox)
             is_right.append(1)
 
@@ -142,55 +166,12 @@ def vit_pose_detection(img, detector, cpm, confidence_threshold=DEFAULT_CONFIDEN
     return boxes, right
 
 
-def concat_both_hands_verts(verts, is_right):
-    """
-    Concatenate vertices for both hands with the right hand first.
-    
-    Args:
-        verts (list): List of vertices for each hand
-        is_right (list): List of flags indicating if hand is right
-        
-    Returns:
-        np.ndarray: Concatenated vertices with right hand first
-    """
-    # First hand has to be right hand
-    if is_right[0]:
-        first = verts[0]
-        second = verts[1]
-    else:
-        first = verts[1]
-        second = verts[0]
-    return np.concatenate([first, second], axis=0)
-
-
-def hands_to_mesh(verts, mano_faces, mesh_base_color=(1.0, 1.0, 0.9)):
-    """
-    Create a mesh from hand vertices.
-    
-    Args:
-        verts (np.ndarray): Hand vertices
-        mano_faces (np.ndarray): MANO faces
-        mesh_base_color (tuple): RGB color for the mesh
-        
-    Returns:
-        o3d.geometry.TriangleMesh: Triangle mesh of the hands
-    """
-    faces_left = mano_faces[:,[0,2,1]]
-    faces_right = mano_faces
-    vertex_colors = np.array([mesh_base_color] * verts.shape[0])
-    both_hands_faces = np.concatenate([faces_right, faces_left + verts.shape[0] // 2], axis=0)
-    
-    mesh = o3d.geometry.TriangleMesh()
-    mesh.vertices = o3d.utility.Vector3dVector(verts)
-    mesh.triangles = o3d.utility.Vector3iVector(both_hands_faces)
-    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
-    return mesh
-
-
-def process_image(img_cv2, model, model_cfg, device, detector, cpm, renderer, out_folder, out_name):
+def process_image(
+    img_cv2, model, model_cfg, device, detector, cpm, renderer, out_folder, out_name
+):
     """
     Process an image to detect and render hands.
-    
+
     Args:
         img_cv2 (np.ndarray): Input image in BGR format
         model: HaMeR model
@@ -201,16 +182,16 @@ def process_image(img_cv2, model, model_cfg, device, detector, cpm, renderer, ou
         renderer: Renderer object
         out_folder (str): Output folder path
         out_name (str): Output file name prefix
-        
+
     Returns:
         tuple: Hand vertices, camera parameters, and other detection data
     """
     boxes, right = vit_pose_detection(img_cv2, detector, cpm)
     dataset = ViTDetDataset(model_cfg, img_cv2, boxes, right, rescale_factor=2.0)
-    
+
     if len(dataset) != 2:
         raise ValueError(f"Dataset length must be 2. Got {len(dataset)}")
-        
+
     batch = default_collate([dataset[0], dataset[1]])
     batch = recursive_to(batch, device)
 
@@ -218,22 +199,29 @@ def process_image(img_cv2, model, model_cfg, device, detector, cpm, renderer, ou
         out = model(batch)
 
     # Process model output
-    multiplier = (2 * batch['right'] - 1)
-    pred_cam = out['pred_cam']
+    multiplier = 2 * batch["right"] - 1
+    pred_cam = out["pred_cam"]
     pred_cam[:, 1] = multiplier * pred_cam[:, 1]
     box_center = batch["box_center"].float()
     box_size = batch["box_size"].float()
     img_size = batch["img_size"].float()
-    
-    ret_verts = out['pred_vertices']
-    ret_verts[:, :, 0] = multiplier.reshape(-1, 1) * ret_verts[:, :, 0]  
 
-    scaled_focal_length = model_cfg.EXTRA.FOCAL_LENGTH / model_cfg.MODEL.IMAGE_SIZE * img_size.max()
-    
-    pred_cam_t_full = cam_crop_to_full(pred_cam, box_center, box_size, img_size, scaled_focal_length).detach().cpu().numpy()
-    
-    is_right = batch['right']
-    
+    ret_verts = out["pred_vertices"]
+    ret_verts[:, :, 0] = multiplier.reshape(-1, 1) * ret_verts[:, :, 0]
+
+    scaled_focal_length = (
+        model_cfg.EXTRA.FOCAL_LENGTH / model_cfg.MODEL.IMAGE_SIZE * img_size.max()
+    )
+
+    pred_cam_t_full = (
+        cam_crop_to_full(pred_cam, box_center, box_size, img_size, scaled_focal_length)
+        .detach()
+        .cpu()
+        .numpy()
+    )
+
+    is_right = batch["right"]
+
     all_verts = [ret_verts[n].detach().cpu().numpy() for n in range(2)]
     all_cam_t = [pred_cam_t_full[n] for n in range(2)]
     all_right = [is_right[n].cpu().numpy() for n in range(2)]
@@ -243,326 +231,322 @@ def process_image(img_cv2, model, model_cfg, device, detector, cpm, renderer, ou
         mesh_base_color=LIGHT_BLUE,
         scene_bg_color=(1, 1, 1),
         focal_length=scaled_focal_length,
-        name=os.path.join(out_folder, f'{out_name}_all.obj'),
+        name=os.path.join(out_folder, f"{out_name}_all.obj"),
     )
-    cam_view = renderer.render_rgba_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[0], is_right=all_right, **render_args)
+    cam_view = renderer.render_rgba_multiple(
+        all_verts,
+        cam_t=all_cam_t,
+        render_res=img_size[0],
+        is_right=all_right,
+        **render_args,
+    )
 
     # Overlay image
-    input_img = img_cv2.astype(np.float32)[:,:,::-1]/255.0
-    input_img = np.concatenate([input_img, np.ones_like(input_img[:,:,:1])], axis=2)  # Add alpha channel
-    input_img_overlay = input_img[:,:,:3] * (1-cam_view[:,:,3:]) + cam_view[:,:,:3] * cam_view[:,:,3:]
+    input_img = img_cv2.astype(np.float32)[:, :, ::-1] / 255.0
+    input_img = np.concatenate(
+        [input_img, np.ones_like(input_img[:, :, :1])], axis=2
+    )  # Add alpha channel
+    input_img_overlay = (
+        input_img[:, :, :3] * (1 - cam_view[:, :, 3:])
+        + cam_view[:, :, :3] * cam_view[:, :, 3:]
+    )
 
     # Save output images
-    cv2.imwrite(os.path.join(out_folder, f'{out_name}_all.jpg'), 255*input_img_overlay[:, :, ::-1])
-    
-    mask = renderer.render_mask_multiple(all_verts, cam_t=all_cam_t, render_res=img_size[0], is_right=all_right, focal_length=scaled_focal_length)
-    cv2.imwrite(os.path.join(out_folder, f'{out_name}_all_mask.png'), 255*mask)
-    
+    cv2.imwrite(
+        os.path.join(out_folder, f"{out_name}_all.jpg"),
+        255 * input_img_overlay[:, :, ::-1],
+    )
+
+    mask = renderer.render_mask_multiple(
+        all_verts,
+        cam_t=all_cam_t,
+        render_res=img_size[0],
+        is_right=all_right,
+        focal_length=scaled_focal_length,
+    )
+    cv2.imwrite(os.path.join(out_folder, f"{out_name}_all_mask.png"), 255 * mask)
+
     return ret_verts, pred_cam, box_center, box_size, img_size, is_right, mask
 
 
-def compute_alignment_loss(focal_length, ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right,
-                           exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right):
-    """
-    Computes the Umeyama alignment loss for a given focal length.
-    
-    Args:
-        focal_length (float): Focal length to evaluate
-        ego_pred_cam, exo_pred_cam: Camera predictions
-        ego/exo_box_center, ego/exo_box_size, ego/exo_img_size: Box parameters
-        ego/exo_ret_verts: Hand vertices
-        ego/exo_is_right: Hand orientation flags
-        
-    Returns:
-        float: Alignment loss value
-    """
-    # Convert vertices to point clouds
-    ego_pcd = convert_to_global_vertices(
-        ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right, 
-        focal_length, as_pcd=True
+def pcd2dense(pcd, faces, vert_count, mesh_base_color=(1.0, 1.0, 0.9)):
+    faces_left = faces[:, [0, 2, 1]]
+    faces_right = faces
+    vertex_colors = np.array([mesh_base_color] * len(pcd.points))
+    both_hands_faces = np.concatenate(
+        [faces_right, faces_left + len(pcd.points) // 2], axis=0
     )
-    
-    exo_pcd = convert_to_global_vertices(
-        exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right, 
-        focal_length, as_pcd=True
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(pcd.points)
+    mesh.triangles = o3d.utility.Vector3iVector(both_hands_faces)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
+
+    pcd = mesh.sample_points_uniformly(number_of_points=vert_count)
+    return pcd
+
+
+def compute_alignment_loss(
+    focal_length,
+    ego_pred_cam,
+    ego_box_center,
+    ego_box_size,
+    ego_img_size,
+    ego_ret_verts,
+    ego_is_right,
+    exo_pred_cam,
+    exo_box_center,
+    exo_box_size,
+    exo_img_size,
+    exo_ret_verts,
+    exo_is_right,
+    return_details=False,
+):
+    ego_pcd = transform_verts_focal_length(
+        ego_pred_cam,
+        ego_box_center,
+        ego_box_size,
+        ego_img_size,
+        ego_ret_verts,
+        ego_is_right,
+        focal_length,
     )
-    
-    # Calculate alignment loss
-    _, loss, _ = umeyama_alignment(ego_pcd, exo_pcd)
+    exo_pcd = transform_verts_focal_length(
+        exo_pred_cam,
+        exo_box_center,
+        exo_box_size,
+        exo_img_size,
+        exo_ret_verts,
+        exo_is_right,
+        focal_length,
+    )
+    transformation, loss, _ = umeyama_alignment(ego_pcd, exo_pcd)
+    if return_details:
+        return loss, transformation, ego_pcd, exo_pcd
     return loss
 
 
-def rgb_path_to_rest(rgb_path_str):
-    """
-    Derives paths for depth, intrinsics, and extrinsics from the RGB image path.
-    
-    Args:
-        rgb_path_str (str): Path to an RGB image
-        
-    Returns:
-        tuple: (depth_path, cam_int_path, cam_ext_path)
-    """
-    rgb_path = Path(rgb_path_str)
-    base_dir = rgb_path.parent.parent  # Go up from 'rgb' dir to 'camX' dir
-
-    depth_path = base_dir / 'depth' / rgb_path.name
-    cam_int_path = base_dir / 'cam_intrinsics.txt'
-    cam_ext_path = base_dir / 'cam_pose' / rgb_path.with_suffix('.txt').name
-    return depth_path, cam_int_path, cam_ext_path
-
-
-def load_from_rgb_path(rgb_path_str):
-    """
-    Load depth, RGB, camera intrinsics and extrinsics from an RGB path.
-    
-    Args:
-        rgb_path_str (str): Path to an RGB image
-        
-    Returns:
-        tuple: (depth, rgb, cam_int, cam_ext)
-    """
-    depth_path, cam_int_path, cam_ext_path = rgb_path_to_rest(rgb_path_str)
-    depth = cv2.imread(str(depth_path), cv2.IMREAD_ANYDEPTH)
-    rgb = cv2.imread(rgb_path_str)
-    cam_int = np.loadtxt(str(cam_int_path))
-    cam_ext = np.loadtxt(str(cam_ext_path)).reshape(4, 4)
-    return depth, rgb, cam_int, cam_ext
-
-
-def convert_to_global_vertices(pred_cam, box_center, box_size, img_size, ret_verts, is_right, focal_length, as_pcd=False):
-    """
-    Convert predicted camera parameters and vertices to global space and combine both hands.
-    
-    Args:
-        pred_cam (torch.Tensor): Camera prediction tensor
-        box_center (torch.Tensor): Box center coordinates
-        box_size (torch.Tensor): Box size
-        img_size (torch.Tensor): Image dimensions
-        ret_verts (torch.Tensor): Predicted vertices
-        is_right (torch.Tensor): Hand orientation indicators (1 for right, 0 for left)
-        focal_length (float): Focal length for camera conversion
-        as_pcd (bool): Whether to return as Open3D point cloud
-        
-    Returns:
-        Either numpy array of vertices or Open3D point cloud
-    """
-    # Convert camera parameters to full image coordinates
-    pred_cam_t = cam_crop_to_full(pred_cam, box_center, box_size, img_size, focal_length).detach().cpu().numpy()
-    
-    # Transform vertices to global space
-    verts_t = ret_verts.detach().cpu().numpy() + pred_cam_t[:,None,:]
-    
-    # Combine both hands ensuring right hand comes first
-    mano_verts = concat_both_hands_verts(verts_t, is_right.cpu().numpy())
-    
-    # Optionally convert to point cloud
-    if as_pcd:
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(mano_verts)
-        return pcd
-    
-    return mano_verts
+def transform_verts_focal_length(
+    pred_cam, box_center, box_size, img_size, ret_verts, is_right, focal_length
+):
+    pred_cam_t = (
+        cam_crop_to_full(pred_cam, box_center, box_size, img_size, focal_length)
+        .detach()
+        .cpu()
+        .numpy()
+    )
+    verts_t = ret_verts.detach().cpu().numpy() + pred_cam_t[:, None, :]
+    mano_verts = np.concatenate(
+        verts_t if is_right[0] else verts_t[::-1], axis=0
+    )  # make sure right hand comes first
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(mano_verts)
+    return pcd
 
 
 def optimize_focal_length(ego_params, exo_params):
-    """
-    Find the optimal focal length that minimizes alignment error.
-    
-    Args:
-        ego_params (tuple): Parameters for ego view
-        exo_params (tuple): Parameters for exo view
-        
-    Returns:
-        tuple: (optimal_focal_length, min_loss)
-    """
-    # Define bounds for the focal length search
-    focal_length_bounds = DEFAULT_FOCAL_LENGTH_BOUNDS
-
-    # Package all parameters together
     loss_args = ego_params + exo_params
 
-    # Find the optimal focal length
     result = minimize_scalar(
         compute_alignment_loss,
-        bounds=focal_length_bounds,
+        bounds=DEFAULT_FOCAL_LENGTH_BOUNDS,
         args=loss_args,
-        method='bounded'
+        method="bounded",
+    )
+
+    loss, transformation, ego_pcd, exo_pcd = compute_alignment_loss(
+        result.x, *loss_args, return_details=True
     )
 
     if result.success:
-        optimal_focal_length = result.x
-        min_loss = result.fun
-        print(f"Optimization successful.")
+        return result.x, loss, transformation, ego_pcd, exo_pcd
     else:
-        print(f"Optimization failed: {result.message}. Using best found value.")
-        optimal_focal_length = result.x
-        min_loss = compute_alignment_loss(optimal_focal_length, *loss_args)
-
-    return optimal_focal_length, min_loss
-
-
-def save_aligned_point_clouds(args, ego_mesh, exo_mesh, ego_pcd, exo_pcd, alignment_transform):
-    """
-    Save the aligned point clouds.
-    
-    Args:
-        args: Command line arguments
-        ego_mesh, exo_mesh: Hand meshes
-        ego_pcd, exo_pcd: Point clouds
-        alignment_transform: Transformation matrix
-    """
-    # Create uniformly sampled point clouds from meshes
-    ego_mano_pcd = ego_mesh.sample_points_uniformly(number_of_points=len(ego_pcd.points))
-    exo_mano_pcd = exo_mesh.sample_points_uniformly(number_of_points=len(exo_pcd.points))
-
-    # Register ego point cloud
-    print("\n--- Registering EGO View ---")
-    aligned_ego_mano_pcd, ego_transformation = register_point_clouds(
-        source_pcd=ego_mano_pcd,
-        target_pcd=ego_pcd
-    )
-    
-    # Register exo point cloud
-    print("\n--- Registering EXO View ---")
-    aligned_exo_mano_pcd, exo_transformation = register_point_clouds(
-        source_pcd=exo_mano_pcd,
-        target_pcd=exo_pcd
-    )
-    
-    # Combine and save point clouds
-    combined_ego_pcd = ego_pcd + aligned_ego_mano_pcd
-    combined_ego_ply_path = f"{args.out_folder}/combined_aligned_ego_pcd.ply"
-    o3d.io.write_point_cloud(combined_ego_ply_path, combined_ego_pcd)
-    
-    combined_exo_pcd = exo_pcd + aligned_exo_mano_pcd
-    combined_exo_ply_path = f"{args.out_folder}/combined_aligned_exo_pcd.ply"
-    o3d.io.write_point_cloud(combined_exo_ply_path, combined_exo_pcd)
-    
-    print(f"Saved combined EGO point cloud to {combined_ego_ply_path}")
-    print(f"Saved combined EXO point cloud to {combined_exo_ply_path}")
-
-    # Check transformation chains
-    check_mano_transform = copy.deepcopy(ego_mano_pcd)
-    check_mano_transform.transform(alignment_transform)
-    check_mano_transform += exo_mano_pcd
-    o3d.io.write_point_cloud(f"{args.out_folder}/check_mano_transform.ply", check_mano_transform)
-
-    check_ego_transform = copy.deepcopy(ego_mano_pcd)
-    check_ego_transform.transform(ego_transformation)
-    check_ego_transform += ego_pcd
-    o3d.io.write_point_cloud(f"{args.out_folder}/check_ego_transform.ply", check_ego_transform)
-    
-    check_exo_transform = copy.deepcopy(exo_mano_pcd)
-    check_exo_transform.transform(exo_transformation)
-    check_exo_transform += exo_pcd
-    o3d.io.write_point_cloud(f"{args.out_folder}/check_exo_transform.ply", check_exo_transform)
-
-    # Calculate the transformation chain
-    ego_transformation_inv = np.linalg.inv(ego_transformation)
-    transformation_chain = np.matmul(exo_transformation, np.matmul(alignment_transform, ego_transformation_inv))
-    
-    # Apply the transformation chain to ego_pcd
-    transformed_ego_pcd = copy.deepcopy(ego_pcd)
-    transformed_ego_pcd.transform(transformation_chain)
-    
-    # Visualize and save the result
-    combined_transformed_pcd = transformed_ego_pcd + exo_pcd
-    o3d.io.write_point_cloud(f"{args.out_folder}/ego_to_exo_transformed.ply", combined_transformed_pcd)
-    
-    return transformation_chain
+        raise ValueError(f"Optimization failed: {result.message}")
 
 
 def main():
     """Main function to process images and align hand models."""
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='HaMeR demo code')
-    parser.add_argument('--checkpoint', type=str, default=DEFAULT_CHECKPOINT, help='Path to pretrained model checkpoint')
-    parser.add_argument('--ego_image', type=str, required=True, help='Path to ego image')
-    parser.add_argument('--exo_image', type=str, required=True, help='Path to exo image')
-    parser.add_argument('--out_folder', type=str, default=DEFAULT_OUTPUT_FOLDER, help='Output folder to save rendered results')
-    parser.add_argument('--body_detector', type=str, default='regnety', choices=['vitdet', 'regnety'], help='Using regnety improves runtime and reduces memory')
+    parser = argparse.ArgumentParser(description="HaMeR demo code")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=DEFAULT_CHECKPOINT,
+        help="Path to pretrained model checkpoint",
+    )
+    parser.add_argument(
+        "--ego_image", type=str, required=True, help="Path to ego image"
+    )
+    parser.add_argument(
+        "--exo_image", type=str, required=True, help="Path to exo image"
+    )
+    parser.add_argument(
+        "--out_folder",
+        type=str,
+        default=DEFAULT_OUTPUT_FOLDER,
+        help="Output folder to save rendered results",
+    )
+    parser.add_argument(
+        "--body_detector",
+        type=str,
+        default="regnety",
+        choices=["vitdet", "regnety"],
+        help="Using regnety improves runtime and reduces memory",
+    )
     args = parser.parse_args()
-    
-    # Initialize models
+
+    # Initialize
     model, model_cfg, device, detector, cpm, renderer = initialize(args)
-    
-    # Load and process images
     ego_img = cv2.imread(args.ego_image)
     exo_img = cv2.imread(args.exo_image)
+    (
+        ego_ret_verts,
+        ego_pred_cam,
+        ego_box_center,
+        ego_box_size,
+        ego_img_size,
+        ego_is_right,
+        ego_mask,
+    ) = process_image(
+        ego_img,
+        model,
+        model_cfg,
+        device,
+        detector,
+        cpm,
+        renderer,
+        args.out_folder,
+        "ego",
+    )
+    (
+        exo_ret_verts,
+        exo_pred_cam,
+        exo_box_center,
+        exo_box_size,
+        exo_img_size,
+        exo_is_right,
+        exo_mask,
+    ) = process_image(
+        exo_img,
+        model,
+        model_cfg,
+        device,
+        detector,
+        cpm,
+        renderer,
+        args.out_folder,
+        "exo",
+    )
 
-    ego_ret_verts, ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_is_right, ego_mask = process_image(
-        ego_img, model, model_cfg, device, detector, cpm, renderer, args.out_folder, 'ego'
-    )
-    
-    exo_ret_verts, exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_is_right, exo_mask = process_image(
-        exo_img, model, model_cfg, device, detector, cpm, renderer, args.out_folder, 'exo'
-    )
-    
-    # Package parameters for focal length optimization
+    # Focal length optimization
     ego_params = (
-        ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right
+        ego_pred_cam,
+        ego_box_center,
+        ego_box_size,
+        ego_img_size,
+        ego_ret_verts,
+        ego_is_right,
     )
-    
     exo_params = (
-        exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right
+        exo_pred_cam,
+        exo_box_center,
+        exo_box_size,
+        exo_img_size,
+        exo_ret_verts,
+        exo_is_right,
     )
-    
-    # Find optimal focal length
-    optimal_focal_length, min_loss = optimize_focal_length(ego_params, exo_params)
+    optimal_focal_length, min_loss, alignment_transform, ego_mano_pcd, exo_mano_pcd = (
+        optimize_focal_length(ego_params, exo_params)
+    )
     print(f"Optimal Focal length: {optimal_focal_length:.2f}")
     print(f"Final Alignment Loss: {min_loss}")
 
-    # Generate meshes with optimal focal length
-    ego_mano_verts = convert_to_global_vertices(
-        ego_pred_cam, ego_box_center, ego_box_size, ego_img_size, ego_ret_verts, ego_is_right, 
-        optimal_focal_length
-    )
-    
-    exo_mano_verts = convert_to_global_vertices(
-        exo_pred_cam, exo_box_center, exo_box_size, exo_img_size, exo_ret_verts, exo_is_right, 
-        optimal_focal_length
+    ## test
+    o3d.io.write_point_cloud(
+        f"{args.out_folder}/focal_length_test.ply",
+        copy.deepcopy(ego_mano_pcd).transform(alignment_transform)
+        + copy.deepcopy(exo_mano_pcd),
     )
 
-    # Create meshes from the vertices
-    ego_mano_mesh = hands_to_mesh(ego_mano_verts, model.mano.faces)
-    exo_mano_mesh = hands_to_mesh(exo_mano_verts, model.mano.faces)
-    
-    # Save meshes
-    o3d.io.write_triangle_mesh(f"{args.out_folder}/mesh_exo.obj", exo_mano_mesh)
-    o3d.io.write_triangle_mesh(f"{args.out_folder}/mesh_ego.obj", ego_mano_mesh)
-
-    # Create point clouds for alignment
-    ego_mano_pcd = o3d.geometry.PointCloud()
-    ego_mano_pcd.points = o3d.utility.Vector3dVector(ego_mano_verts)
-    
-    exo_mano_pcd = o3d.geometry.PointCloud()
-    exo_mano_pcd.points = o3d.utility.Vector3dVector(exo_mano_verts)
-
-    # Get the final alignment transformation and transformed point cloud
-    alignment_transform, final_loss, transformed_ego_pcd = umeyama_alignment(ego_mano_pcd, exo_mano_pcd)
-    
-    # Load depth data and create point clouds
+    # Create Point Clouds
     ego_depth, ego_rgb, ego_cam_int, ego_cam_ext = load_from_rgb_path(args.ego_image)
     exo_depth, exo_rgb, exo_cam_int, exo_cam_ext = load_from_rgb_path(args.exo_image)
     ego_pcd = depth2pcd(ego_depth, ego_rgb, ego_cam_int, ego_cam_ext, mask=ego_mask)
     exo_pcd = depth2pcd(exo_depth, exo_rgb, exo_cam_int, exo_cam_ext, mask=exo_mask)
-    
-    # Save aligned point clouds and get transformation chain
-    transformation_chain = save_aligned_point_clouds(
-        args, ego_mano_mesh, exo_mano_mesh, ego_pcd, exo_pcd, alignment_transform
+    ego_mano_pcd = pcd2dense(ego_mano_pcd, model.mano.faces, len(ego_pcd.points))
+    exo_mano_pcd = pcd2dense(exo_mano_pcd, model.mano.faces, len(exo_pcd.points))
+
+    # Register ego point cloud)
+    aligned_ego_mano_pcd, ego_transformation = register_point_clouds(
+        source_pcd=ego_mano_pcd, target_pcd=ego_pcd
+    )
+    ## test
+    o3d.io.write_point_cloud(
+        f"{args.out_folder}/ego_registration_test.ply",
+        copy.deepcopy(ego_mano_pcd).transform(ego_transformation)
+        + copy.deepcopy(ego_pcd),
     )
 
-    # Generate and save full point clouds
+    # Register exo point cloud
+    aligned_exo_mano_pcd, exo_transformation = register_point_clouds(
+        source_pcd=exo_mano_pcd, target_pcd=exo_pcd
+    )
+    ## test
+    o3d.io.write_point_cloud(
+        f"{args.out_folder}/exo_registration_test.ply",
+        copy.deepcopy(exo_mano_pcd).transform(exo_transformation)
+        + copy.deepcopy(exo_pcd),
+    )
+
+    # Compute transformation chain
+    ego_to_exo_transform = np.matmul(
+        exo_transformation,
+        np.matmul(alignment_transform, np.linalg.inv(ego_transformation)),
+    )
+    exo_to_ego_transform = np.linalg.inv(ego_to_exo_transform)
+
+    # Apply transformation chain to ego point cloud
     ego_total_pcd = depth2pcd(ego_depth, ego_rgb, ego_cam_int, ego_cam_ext)
     exo_total_pcd = depth2pcd(exo_depth, exo_rgb, exo_cam_int, exo_cam_ext)
 
-    # Transform and combine ego point cloud to exo frame
+    # Apply transformation chain to ego point cloud
     transformed_ego_total_pcd = copy.deepcopy(ego_total_pcd)
-    transformed_ego_total_pcd.transform(transformation_chain)
+    transformed_ego_total_pcd.transform(ego_to_exo_transform)
     combined_total_pcd = transformed_ego_total_pcd + exo_total_pcd
     o3d.io.write_point_cloud(f"{args.out_folder}/combined_pcd.ply", combined_total_pcd)
     print(f"Saved combined point cloud to {args.out_folder}/combined_pcd.ply")
 
+    exo_rgb_path = "/local/home/andrye/dev/H2O/subject1/h1/2/cam2/rgb/000043.png"
+    exo_cam_id = "cam2"
+    ego_cam_id = "cam4"
 
-if __name__ == '__main__':
+    exo_rgb_path = exo_rgb_path.replace(exo_cam_id, exo_cam_id)
+    exo_depth_path = exo_rgb_path.replace("rgb", "depth")
+    exo_rgb_id = os.path.join("rgb", exo_rgb_path.split("/")[-1])
+    exo_cam_int_path = exo_rgb_path.replace(exo_rgb_id, "cam_intrinsics.txt")
+    exo_cam_ext_path = exo_rgb_path.replace("rgb", "cam_pose").replace("png", "txt")
+    exo_hand_path = exo_rgb_path.replace("rgb", "hand_pose").replace("png", "txt")
+    # egos
+    ego_cam_int_path = exo_cam_int_path.replace(exo_cam_id, ego_cam_id)
+    ego_cam_ext_path = exo_cam_ext_path.replace(exo_cam_id, ego_cam_id)
+    ego_hand_path = exo_hand_path.replace(exo_cam_id, ego_cam_id)
+    ego_rgb_pred = exo2ego(
+        exo_rgb_path,
+        exo_depth_path,
+        exo_cam_int_path,
+        exo_cam_ext_path,
+        exo_hand_path,
+        ego_cam_int_path,
+        ego_cam_ext_path,
+        ego_hand_path,
+        np.linalg.inv(transformation_chain),
+    )
+    # vis
+    exo_rgb_gt = cv2.imread(exo_rgb_path)
+    ego_rgb_gt = cv2.imread(exo_rgb_path.replace(exo_cam_id, ego_cam_id))
+    cv2.imwrite("vis_sparse_ego.png", ego_rgb_pred)
+    print(f"Saved vis_sparse_ego.png to {args.out_folder}")
+
+
+if __name__ == "__main__":
     main()

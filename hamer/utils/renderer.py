@@ -1,6 +1,7 @@
 import os
-if 'PYOPENGL_PLATFORM' not in os.environ:
-    os.environ['PYOPENGL_PLATFORM'] = 'egl'
+
+if "PYOPENGL_PLATFORM" not in os.environ:
+    os.environ["PYOPENGL_PLATFORM"] = "egl"
 import torch
 import numpy as np
 import pyrender
@@ -9,17 +10,19 @@ import cv2
 from yacs.config import CfgNode
 from typing import List, Optional
 
-def cam_crop_to_full(cam_bbox, box_center, box_size, img_size, focal_length=5000.):
+
+def cam_crop_to_full(cam_bbox, box_center, box_size, img_size, focal_length=5000.0):
     # Convert cam_bbox to full image
     img_w, img_h = img_size[:, 0], img_size[:, 1]
     cx, cy, b = box_center[:, 0], box_center[:, 1], box_size
-    w_2, h_2 = img_w / 2., img_h / 2.
+    w_2, h_2 = img_w / 2.0, img_h / 2.0
     bs = b * cam_bbox[:, 0] + 1e-9
     tz = 2 * focal_length / bs
     tx = (2 * (cx - w_2) / bs) + cam_bbox[:, 1]
     ty = (2 * (cy - h_2) / bs) + cam_bbox[:, 2]
     full_cam = torch.stack([tx, ty, tz], dim=-1)
     return full_cam
+
 
 def get_light_poses(n_lights=5, elevation=np.pi / 3, dist=12):
     # get lights in a circle around origin at elevation
@@ -32,8 +35,10 @@ def get_light_poses(n_lights=5, elevation=np.pi / 3, dist=12):
         poses.append((rot @ trans).numpy())
     return poses
 
+
 def make_translation(t):
     return make_4x4_pose(torch.eye(3), t)
+
 
 def make_rotation(rx=0, ry=0, rz=0, order="xyz"):
     Rx = rotx(rx)
@@ -52,6 +57,7 @@ def make_rotation(rx=0, ry=0, rz=0, order="xyz"):
     elif order == "zxy":
         R = Ry @ Rx @ Rz
     return make_4x4_pose(R, torch.zeros(3))
+
 
 def make_4x4_pose(R, t):
     """
@@ -100,7 +106,7 @@ def rotz(theta):
         ],
         dtype=torch.float32,
     )
-    
+
 
 def create_raymond_lights() -> List[pyrender.Node]:
     """
@@ -125,13 +131,16 @@ def create_raymond_lights() -> List[pyrender.Node]:
         y = np.cross(z, x)
 
         matrix = np.eye(4)
-        matrix[:3,:3] = np.c_[x,y,z]
-        nodes.append(pyrender.Node(
-            light=pyrender.DirectionalLight(color=np.ones(3), intensity=1.0),
-            matrix=matrix
-        ))
+        matrix[:3, :3] = np.c_[x, y, z]
+        nodes.append(
+            pyrender.Node(
+                light=pyrender.DirectionalLight(color=np.ones(3), intensity=1.0),
+                matrix=matrix,
+            )
+        )
 
     return nodes
+
 
 class Renderer:
 
@@ -147,37 +156,43 @@ class Renderer:
         self.img_res = cfg.MODEL.IMAGE_SIZE
 
         # add faces that make the hand mesh watertight
-        faces_new = np.array([[92, 38, 234],
-                              [234, 38, 239],
-                              [38, 122, 239],
-                              [239, 122, 279],
-                              [122, 118, 279],
-                              [279, 118, 215],
-                              [118, 117, 215],
-                              [215, 117, 214],
-                              [117, 119, 214],
-                              [214, 119, 121],
-                              [119, 120, 121],
-                              [121, 120, 78],
-                              [120, 108, 78],
-                              [78, 108, 79]])
+        faces_new = np.array(
+            [
+                [92, 38, 234],
+                [234, 38, 239],
+                [38, 122, 239],
+                [239, 122, 279],
+                [122, 118, 279],
+                [279, 118, 215],
+                [118, 117, 215],
+                [215, 117, 214],
+                [117, 119, 214],
+                [214, 119, 121],
+                [119, 120, 121],
+                [121, 120, 78],
+                [120, 108, 78],
+                [78, 108, 79],
+            ]
+        )
         faces = np.concatenate([faces, faces_new], axis=0)
-        
+
         self.camera_center = [self.img_res // 2, self.img_res // 2]
         self.faces = faces
-        self.faces_left = self.faces[:,[0,2,1]]
+        self.faces_left = self.faces[:, [0, 2, 1]]
 
-    def __call__(self,
-                vertices: np.array,
-                camera_translation: np.array,
-                image: torch.Tensor,
-                full_frame: bool = False,
-                imgname: Optional[str] = None,
-                side_view=False, rot_angle=90,
-                mesh_base_color=(1.0, 1.0, 0.9),
-                scene_bg_color=(0,0,0),
-                return_rgba=False,
-                ) -> np.array:
+    def __call__(
+        self,
+        vertices: np.array,
+        camera_translation: np.array,
+        image: torch.Tensor,
+        full_frame: bool = False,
+        imgname: Optional[str] = None,
+        side_view=False,
+        rot_angle=90,
+        mesh_base_color=(1.0, 1.0, 0.9),
+        scene_bg_color=(0, 0, 0),
+        return_rgba=False,
+    ) -> np.array:
         """
         Render meshes on input image
         Args:
@@ -187,45 +202,57 @@ class Renderer:
             full_frame (bool): If True, then render on the full image.
             imgname (Optional[str]): Contains the original image filenamee. Used only if full_frame == True.
         """
-        
+
         if full_frame:
-            image = cv2.imread(imgname).astype(np.float32)[:, :, ::-1] / 255.
+            image = cv2.imread(imgname).astype(np.float32)[:, :, ::-1] / 255.0
         else:
-            image = image.clone() * torch.tensor(self.cfg.MODEL.IMAGE_STD, device=image.device).reshape(3,1,1)
-            image = image + torch.tensor(self.cfg.MODEL.IMAGE_MEAN, device=image.device).reshape(3,1,1)
+            image = image.clone() * torch.tensor(
+                self.cfg.MODEL.IMAGE_STD, device=image.device
+            ).reshape(3, 1, 1)
+            image = image + torch.tensor(
+                self.cfg.MODEL.IMAGE_MEAN, device=image.device
+            ).reshape(3, 1, 1)
             image = image.permute(1, 2, 0).cpu().numpy()
 
-        renderer = pyrender.OffscreenRenderer(viewport_width=image.shape[1],
-                                              viewport_height=image.shape[0],
-                                              point_size=1.0)
+        renderer = pyrender.OffscreenRenderer(
+            viewport_width=image.shape[1],
+            viewport_height=image.shape[0],
+            point_size=1.0,
+        )
         material = pyrender.MetallicRoughnessMaterial(
             metallicFactor=0.0,
-            alphaMode='OPAQUE',
-            baseColorFactor=(*mesh_base_color, 1.0))
+            alphaMode="OPAQUE",
+            baseColorFactor=(*mesh_base_color, 1.0),
+        )
 
-        camera_translation[0] *= -1.
+        camera_translation[0] *= -1.0
 
         mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy())
         if side_view:
             rot = trimesh.transformations.rotation_matrix(
-                np.radians(rot_angle), [0, 1, 0])
+                np.radians(rot_angle), [0, 1, 0]
+            )
             mesh.apply_transform(rot)
-        rot = trimesh.transformations.rotation_matrix(
-            np.radians(180), [1, 0, 0])
+        rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
         mesh.apply_transform(rot)
         mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
 
-        scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
-                               ambient_light=(0.3, 0.3, 0.3))
-        scene.add(mesh, 'mesh')
+        scene = pyrender.Scene(
+            bg_color=[*scene_bg_color, 0.0], ambient_light=(0.3, 0.3, 0.3)
+        )
+        scene.add(mesh, "mesh")
 
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
-        camera_center = [image.shape[1] / 2., image.shape[0] / 2.]
-        camera = pyrender.IntrinsicsCamera(fx=self.focal_length, fy=self.focal_length,
-                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+        camera_center = [image.shape[1] / 2.0, image.shape[0] / 2.0]
+        camera = pyrender.IntrinsicsCamera(
+            fx=self.focal_length,
+            fy=self.focal_length,
+            cx=camera_center[0],
+            cy=camera_center[1],
+            zfar=1e12,
+        )
         scene.add(camera, pose=camera_pose)
-
 
         light_nodes = create_raymond_lights()
         for node in light_nodes:
@@ -240,54 +267,67 @@ class Renderer:
 
         valid_mask = (color[:, :, -1])[:, :, np.newaxis]
         if not side_view:
-            output_img = (color[:, :, :3] * valid_mask + (1 - valid_mask) * image)
+            output_img = color[:, :, :3] * valid_mask + (1 - valid_mask) * image
         else:
             output_img = color[:, :, :3]
 
         output_img = output_img.astype(np.float32)
         return output_img
 
-    def vertices_to_trimesh(self, vertices, camera_translation, mesh_base_color=(1.0, 1.0, 0.9), 
-                            rot_axis=[1,0,0], rot_angle=0, is_right=1):
+    def vertices_to_trimesh(
+        self,
+        vertices,
+        camera_translation,
+        mesh_base_color=(1.0, 1.0, 0.9),
+        rot_axis=[1, 0, 0],
+        rot_angle=0,
+        is_right=1,
+    ):
         # material = pyrender.MetallicRoughnessMaterial(
         #     metallicFactor=0.0,
         #     alphaMode='OPAQUE',
         #     baseColorFactor=(*mesh_base_color, 1.0))
         vertex_colors = np.array([(*mesh_base_color, 1.0)] * vertices.shape[0])
         if is_right:
-            mesh = trimesh.Trimesh(vertices.copy() + camera_translation, self.faces.copy(), vertex_colors=vertex_colors)
+            mesh = trimesh.Trimesh(
+                vertices.copy() + camera_translation,
+                self.faces.copy(),
+                vertex_colors=vertex_colors,
+            )
         else:
-            mesh = trimesh.Trimesh(vertices.copy() + camera_translation, self.faces_left.copy(), vertex_colors=vertex_colors)
+            mesh = trimesh.Trimesh(
+                vertices.copy() + camera_translation,
+                self.faces_left.copy(),
+                vertex_colors=vertex_colors,
+            )
         # mesh = trimesh.Trimesh(vertices.copy(), self.faces.copy())
-        
-        rot = trimesh.transformations.rotation_matrix(
-                np.radians(rot_angle), rot_axis)
+
+        rot = trimesh.transformations.rotation_matrix(np.radians(rot_angle), rot_axis)
         mesh.apply_transform(rot)
 
-        rot = trimesh.transformations.rotation_matrix(
-            np.radians(180), [1, 0, 0])
+        rot = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
         mesh.apply_transform(rot)
         return mesh
 
     def render_rgba(
-            self,
-            vertices: np.array,
-            cam_t = None,
-            rot=None,
-            rot_axis=[1,0,0],
-            rot_angle=0,
-            camera_z=3,
-            # camera_translation: np.array,
-            mesh_base_color=(1.0, 1.0, 0.9),
-            scene_bg_color=(0,0,0),
-            render_res=[256, 256],
-            focal_length=None,
-            is_right=None,
-        ):
+        self,
+        vertices: np.array,
+        cam_t=None,
+        rot=None,
+        rot_axis=[1, 0, 0],
+        rot_angle=0,
+        camera_z=3,
+        # camera_translation: np.array,
+        mesh_base_color=(1.0, 1.0, 0.9),
+        scene_bg_color=(0, 0, 0),
+        render_res=[256, 256],
+        focal_length=None,
+        is_right=None,
+    ):
 
-        renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
-                                              viewport_height=render_res[1],
-                                              point_size=1.0)
+        renderer = pyrender.OffscreenRenderer(
+            viewport_width=render_res[0], viewport_height=render_res[1], point_size=1.0
+        )
         # material = pyrender.MetallicRoughnessMaterial(
         #     metallicFactor=0.0,
         #     alphaMode='OPAQUE',
@@ -297,25 +337,39 @@ class Renderer:
 
         if cam_t is not None:
             camera_translation = cam_t.copy()
-            camera_translation[0] *= -1.
+            camera_translation[0] *= -1.0
         else:
-            camera_translation = np.array([0, 0, camera_z * focal_length/render_res[1]])
+            camera_translation = np.array(
+                [0, 0, camera_z * focal_length / render_res[1]]
+            )
 
-        mesh = self.vertices_to_trimesh(vertices, np.array([0, 0, 0]), mesh_base_color, rot_axis, rot_angle, is_right=is_right)
+        mesh = self.vertices_to_trimesh(
+            vertices,
+            np.array([0, 0, 0]),
+            mesh_base_color,
+            rot_axis,
+            rot_angle,
+            is_right=is_right,
+        )
         mesh = pyrender.Mesh.from_trimesh(mesh)
         # mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
 
-        scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
-                               ambient_light=(0.3, 0.3, 0.3))
-        scene.add(mesh, 'mesh')
+        scene = pyrender.Scene(
+            bg_color=[*scene_bg_color, 0.0], ambient_light=(0.3, 0.3, 0.3)
+        )
+        scene.add(mesh, "mesh")
 
         camera_pose = np.eye(4)
         camera_pose[:3, 3] = camera_translation
-        camera_center = [render_res[0] / 2., render_res[1] / 2.]
-        camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
-                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+        camera_center = [render_res[0] / 2.0, render_res[1] / 2.0]
+        camera = pyrender.IntrinsicsCamera(
+            fx=focal_length,
+            fy=focal_length,
+            cx=camera_center[0],
+            cy=camera_center[1],
+            zfar=1e12,
+        )
 
-        # Create camera node and add it to pyRender scene
         camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
         scene.add_node(camera_node)
         self.add_point_lighting(scene, camera_node)
@@ -332,22 +386,22 @@ class Renderer:
         return color
 
     def render_rgba_multiple(
-            self,
-            vertices: List[np.array],
-            cam_t: List[np.array],
-            rot_axis=[1,0,0],
-            rot_angle=0,
-            mesh_base_color=(1.0, 1.0, 0.9),
-            scene_bg_color=(0,0,0),
-            render_res=[256, 256],
-            focal_length=None,
-            is_right=None,
-            name="mesh",
-        ):
+        self,
+        vertices: List[np.array],
+        cam_t: List[np.array],
+        rot_axis=[1, 0, 0],
+        rot_angle=0,
+        mesh_base_color=(1.0, 1.0, 0.9),
+        scene_bg_color=(0, 0, 0),
+        render_res=[256, 256],
+        focal_length=None,
+        is_right=None,
+        name="mesh",
+    ):
 
-        renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
-                                              viewport_height=render_res[1],
-                                              point_size=1.0)
+        renderer = pyrender.OffscreenRenderer(
+            viewport_width=render_res[0], viewport_height=render_res[1], point_size=1.0
+        )
         # material = pyrender.MetallicRoughnessMaterial(
         #     metallicFactor=0.0,
         #     alphaMode='OPAQUE',
@@ -355,24 +409,42 @@ class Renderer:
 
         if is_right is None:
             is_right = [1 for _ in range(len(vertices))]
-        
-        mesh_pre = [self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss) for vvv,ttt,sss in zip(vertices, cam_t, is_right)]
+
+        mesh_pre = [
+            self.vertices_to_trimesh(
+                vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss
+            )
+            for vvv, ttt, sss in zip(vertices, cam_t, is_right)
+        ]
         mesh_pre = trimesh.util.concatenate(mesh_pre)
         mesh_pre.export(f"{name}.obj")
 
-        mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss)) for vvv,ttt,sss in zip(vertices, cam_t, is_right)]
+        mesh_list = [
+            pyrender.Mesh.from_trimesh(
+                self.vertices_to_trimesh(
+                    vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss
+                )
+            )
+            for vvv, ttt, sss in zip(vertices, cam_t, is_right)
+        ]
 
-        scene = pyrender.Scene(bg_color=[*scene_bg_color, 0.0],
-                               ambient_light=(0.3, 0.3, 0.3))
-        for i,mesh in enumerate(mesh_list):
-            scene.add(mesh, f'mesh_{i}')
+        scene = pyrender.Scene(
+            bg_color=[*scene_bg_color, 0.0], ambient_light=(0.3, 0.3, 0.3)
+        )
+        for i, mesh in enumerate(mesh_list):
+            scene.add(mesh, f"mesh_{i}")
 
         camera_pose = np.eye(4)
         # camera_pose[:3, 3] = camera_translation
-        camera_center = [render_res[0] / 2., render_res[1] / 2.]
+        camera_center = [render_res[0] / 2.0, render_res[1] / 2.0]
         focal_length = focal_length if focal_length is not None else self.focal_length
-        camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
-                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+        camera = pyrender.IntrinsicsCamera(
+            fx=focal_length,
+            fy=focal_length,
+            cx=camera_center[0],
+            cy=camera_center[1],
+            zfar=1e12,
+        )
 
         # Create camera node and add it to pyRender scene
         camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
@@ -389,8 +461,6 @@ class Renderer:
         renderer.delete()
 
         return color
-    
-    
 
     def add_lighting(self, scene, cam_node, color=np.ones(3), intensity=1.0):
         # from phalp.visualize.py_renderer import get_light_poses
@@ -429,19 +499,43 @@ class Renderer:
                 continue
             scene.add_node(node)
 
+    def project_vertices(self, vertices, camera, camera_pose, width, height):
+        projection_matrix = camera.get_projection_matrix(width=width, height=height)
+        view_matrix = np.linalg.inv(camera_pose)
+        mvp_matrix = projection_matrix @ view_matrix
+
+        vertices_homogeneous = np.hstack((vertices, np.ones((vertices.shape[0], 1))))
+        clip_space_vertices = (mvp_matrix @ vertices_homogeneous.T).T
+
+        w = clip_space_vertices[:, 3]
+        valid_w_indices = w > 1e-5
+        clip_space_vertices_valid = clip_space_vertices[valid_w_indices]
+        w_valid = w[valid_w_indices]
+
+        if clip_space_vertices_valid.shape[0] == 0:
+            return np.empty((0, 2))
+
+        ndc_vertices = clip_space_vertices_valid[:, :3] / w_valid[:, None]
+
+        screen_coords = np.zeros((ndc_vertices.shape[0], 2))
+        screen_coords[:, 0] = (ndc_vertices[:, 0] + 1) * width / 2
+        screen_coords[:, 1] = (1 - ndc_vertices[:, 1]) * height / 2
+
+        return screen_coords
+
     def render_mask_multiple(
-            self,
-            vertices: List[np.array],
-            cam_t: List[np.array],
-            rot_axis=[1,0,0],
-            rot_angle=0,
-            render_res=[256, 256],
-            focal_length=None,
-            is_right=None,
-        ):
+        self,
+        vertices: List[np.array],
+        cam_t: List[np.array],
+        rot_axis=[1, 0, 0],
+        rot_angle=0,
+        render_res=[256, 256],
+        focal_length=None,
+        is_right=None,
+    ):
         """
         Renders a binary mask where hand regions are 0s and background is 1s.
-        
+
         Args:
             vertices: List of vertex arrays for multiple hands
             cam_t: List of camera translations
@@ -450,47 +544,59 @@ class Renderer:
             render_res: Resolution of the rendered image [width, height]
             focal_length: Camera focal length (uses default if None)
             is_right: List of flags indicating if each hand is right (1) or left (0)
-            
+
         Returns:
             Binary mask as numpy array where 0=hand, 1=background
         """
-        renderer = pyrender.OffscreenRenderer(viewport_width=render_res[0],
-                                              viewport_height=render_res[1],
-                                              point_size=1.0)
+        renderer = pyrender.OffscreenRenderer(
+            viewport_width=render_res[0], viewport_height=render_res[1], point_size=1.0
+        )
 
         if is_right is None:
             is_right = [1 for _ in range(len(vertices))]
-        
+
         # Use a solid color for the meshes
         mesh_base_color = (1.0, 1.0, 1.0)  # Color doesn't matter for mask
-        
+
         # Create meshes for all hands
-        mesh_list = [pyrender.Mesh.from_trimesh(self.vertices_to_trimesh(vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss)) 
-                    for vvv, ttt, sss in zip(vertices, cam_t, is_right)]
+        mesh_list = [
+            pyrender.Mesh.from_trimesh(
+                self.vertices_to_trimesh(
+                    vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss
+                )
+            )
+            for vvv, ttt, sss in zip(vertices, cam_t, is_right)
+        ]
 
         # Create scene with black background
-        scene = pyrender.Scene(bg_color=[0.0, 0.0, 0.0, 0.0],
-                               ambient_light=(0.3, 0.3, 0.3))
-        
+        scene = pyrender.Scene(
+            bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3)
+        )
+
         # Add all meshes to the scene
         for i, mesh in enumerate(mesh_list):
-            scene.add(mesh, f'mesh_{i}')
+            scene.add(mesh, f"mesh_{i}")
 
         # Set up camera
         camera_pose = np.eye(4)
-        camera_center = [render_res[0] / 2., render_res[1] / 2.]
+        camera_center = [render_res[0] / 2.0, render_res[1] / 2.0]
         focal_length = focal_length if focal_length is not None else self.focal_length
-        camera = pyrender.IntrinsicsCamera(fx=focal_length, fy=focal_length,
-                                           cx=camera_center[0], cy=camera_center[1], zfar=1e12)
+        camera = pyrender.IntrinsicsCamera(
+            fx=focal_length,
+            fy=focal_length,
+            cx=camera_center[0],
+            cy=camera_center[1],
+            zfar=1e12,
+        )
 
         # Add camera to scene
         camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
         scene.add_node(camera_node)
-        
+
         # Add lighting
         self.add_point_lighting(scene, camera_node)
         self.add_lighting(scene, camera_node)
-        
+
         light_nodes = create_raymond_lights()
         for node in light_nodes:
             scene.add_node(node)
@@ -498,9 +604,129 @@ class Renderer:
         # Render the scene
         _, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
         renderer.delete()
-        
+
         # Create binary mask: 0 where hands are present, 1 for background
         mask = np.ones_like(rend_depth)
         mask[rend_depth > 0] = 0  # Set to 0 where depth values exist (hand is present)
-        
+
         return mask
+
+        # def render_mask_multiple(
+        #     self,
+        #     vertices: List[np.array],
+        #     cam_t: List[np.array],
+        #     rot_axis=[1, 0, 0],
+        #     rot_angle=0,
+        #     render_res=[256, 256],
+        #     focal_length=None,
+        #     is_right=None,
+        # ):
+        #     """
+        #     Renders a binary mask where hand regions are 0s and background is 1s.
+
+        #     Args:
+        #         vertices: List of vertex arrays for multiple hands
+        #         cam_t: List of camera translations
+        #         rot_axis: Rotation axis for the meshes
+        #         rot_angle: Rotation angle in degrees
+        #         render_res: Resolution of the rendered image [width, height]
+        #         focal_length: Camera focal length (uses default if None)
+        #         is_right: List of flags indicating if each hand is right (1) or left (0)
+
+        #     Returns:
+        #         Binary mask as numpy array where 0=hand, 1=background
+        #     """
+        #     renderer = pyrender.OffscreenRenderer(
+        #         viewport_width=render_res[0], viewport_height=render_res[1], point_size=1.0
+        #     )
+
+        #     if is_right is None:
+        #         is_right = [1 for _ in range(len(vertices))]
+
+        #     # Use a solid color for the meshes
+        #     mesh_base_color = (1.0, 1.0, 1.0)  # Color doesn't matter for mask
+
+        #     # Create meshes for all hands
+        #     mesh_list = [
+        #         pyrender.Mesh.from_trimesh(
+        #             self.vertices_to_trimesh(
+        #                 vvv, ttt.copy(), mesh_base_color, rot_axis, rot_angle, is_right=sss
+        #             )
+        #         )
+        #         for vvv, ttt, sss in zip(vertices, cam_t, is_right)
+        #     ]
+
+        #     # Create scene with black background
+        #     scene = pyrender.Scene(
+        #         bg_color=[0.0, 0.0, 0.0, 0.0], ambient_light=(0.3, 0.3, 0.3)
+        #     )
+
+        #     # Add all meshes to the scene
+        #     for i, mesh in enumerate(mesh_list):
+        #         scene.add(mesh, f"mesh_{i}")
+
+        #     # Set up camera
+        #     camera_pose = np.eye(4)
+        #     camera_center = [render_res[0] / 2.0, render_res[1] / 2.0]
+        #     focal_length = focal_length if focal_length is not None else self.focal_length
+        #     camera = pyrender.IntrinsicsCamera(
+        #         fx=focal_length,
+        #         fy=focal_length,
+        #         cx=camera_center[0],
+        #         cy=camera_center[1],
+        #         zfar=1e12,
+        #     )
+
+        #     # Add camera to scene
+        #     camera_node = pyrender.Node(camera=camera, matrix=camera_pose)
+        #     scene.add_node(camera_node)
+
+        #     # Add lighting
+        #     self.add_point_lighting(scene, camera_node)
+        #     self.add_lighting(scene, camera_node)
+
+        #     light_nodes = create_raymond_lights()
+        #     for node in light_nodes:
+        #         scene.add_node(node)
+
+        #     # Render the scene
+        #     _, rend_depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+        #     print("rend_depth.shape", rend_depth.shape)
+        #     renderer.delete()
+
+        #     # Create binary mask: 0 where hands are present, 1 for background
+        #     mask = np.ones_like(rend_depth)
+        #     mask[rend_depth > 0] = 0  # Set to 0 where depth values exist (hand is present)
+
+        # vertices_projected_list = []
+        # for mesh in mesh_list:
+        #     mesh_vertices = mesh.primitives[0].positions
+        #     vertices_projected = self.project_vertices(
+        #         mesh_vertices,
+        #         camera,
+        #         camera_pose,
+        #         int(render_res[0]),
+        #         int(render_res[1]),
+        #     )
+
+        #     vertices_projected_list.append(vertices_projected)
+
+        # vertices_projected = np.concatenate(vertices_projected_list, axis=1)
+
+        # print("vertices_projected.shape", vertices_projected.shape)
+        # # convert vertices_projected to int
+        # vertices_projected = vertices_projected.astype(int)
+
+        # print("vertices_projected", vertices_projected)
+
+        # # convert vertices to image
+        # print("render_res", render_res)
+        # verts_img = np.zeros((int(render_res[1]), int(render_res[0])))
+        # for i in range(vertices_projected.shape[1]):
+        #     verts_img[vertices_projected[i, 1], vertices_projected[i, 0]] = 1
+
+        # # save the image
+        # cv2.imwrite("verts_img.png", verts_img * 255)
+
+        return mask
+        # return verts_img
